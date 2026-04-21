@@ -70,13 +70,13 @@
   </tr>
 </table>
 
-## <img src="https://img.icons8.com/emoji/20/fire.png" width="18"/> News
+## 🔥 News
 
 - **`2026-04-22`** &ensp; Released model checkpoints: [`DR-Venus-4B-SFT`](https://huggingface.co/inclusionAI/DR-Venus-4B-SFT) and [`DR-Venus-4B-RL`](https://huggingface.co/inclusionAI/DR-Venus-4B-RL).
 - **`2026-04-22`** &ensp; Released the DR-Venus technical report.
 - **`2026-04-22`** &ensp; Open-sourced the full training and inference codebase.
 
-## <img src="https://img.icons8.com/emoji/20/open-book.png" width="18"/> Overview
+## 📖 Overview
 
 The core goal of DR-Venus is to build a strong edge-scale deep research agent under limited open-data supervision by improving both **data quality** and **effective data utilization**. The project consists of three stages:
 
@@ -86,7 +86,7 @@ The core goal of DR-Venus is to build a strong edge-scale deep research agent un
 | **2. RL** | Starting from the SFT checkpoint, apply long-horizon reinforcement learning with [IGPO](https://github.com/GuoqingWang1/IGPO)-style information gain rewards and turn-level format-aware penalties. | [`RL/`](RL/) |
 | **3. Inference** | Deploy the trained model with the same `search` + `visit` tool protocol used during training. | [`Inference/`](Inference/) |
 
-## <img src="https://img.icons8.com/emoji/20/bar-chart.png" width="18"/> Main Results
+## 📊 Main Results
 
 DR-Venus-4B establishes a strong small-model frontier on multiple deep research benchmarks.
 
@@ -116,7 +116,7 @@ DR-Venus-4B establishes a strong small-model frontier on multiple deep research 
   <em>Figure 2: Pass@K comparison on BrowseComp and BrowseComp-ZH.</em>
 </p>
 
-## <img src="https://img.icons8.com/emoji/20/package.png" width="18"/> Data Pipeline
+## 📦 Data Pipeline
 
 The SFT pipeline is built from open [REDSearcher](https://github.com/RedSearchAgent/REDSearcher) trajectories and focuses on making limited supervision more useful for a small model.
 
@@ -134,7 +134,7 @@ Raw REDSearcher Trajectories (10,001)
 
 For RL, we use open QA supervision curated from the [REDSearcher RL data source](https://huggingface.co/datasets/Zchu/REDSearcher_RL_1K).
 
-## <img src="https://img.icons8.com/emoji/20/rocket.png" width="18"/> Quick Start
+## 🚀 Quick Start
 
 Each subdirectory has its own dependencies and entry scripts. Refer to the subproject READMEs for full details.
 
@@ -189,7 +189,7 @@ bash train_igpo.sh
 
 > See [`RL/README.md`](RL/README.md) for reward configuration, rollout setup, and troubleshooting.
 
-## <img src="https://img.icons8.com/emoji/20/electric-plug.png" width="18"/> External Services
+## 🔌 External Services
 
 Both [`Inference/`](Inference/) and [`RL/`](RL/) depend on external tools and model endpoints. SFT does **not** require these.
 
@@ -200,7 +200,7 @@ Both [`Inference/`](Inference/) and [`RL/`](RL/) depend on external tools and mo
 | OpenAI-compatible API | Page summarization |
 | OpenAI-compatible judge model | RL reward evaluation |
 
-## <img src="https://img.icons8.com/emoji/20/file-folder.png" width="18"/> Repository Layout
+## 📁 Repository Layout
 
 ```
 DR-Venus/
@@ -228,7 +228,7 @@ DR-Venus/
 └── model_cards/
 ```
 
-## <img src="https://img.icons8.com/emoji/20/handshake.png" width="18"/> Acknowledgements
+## 🤝 Acknowledgements
 
 DR-Venus builds on several strong open-source foundations:
 
@@ -237,7 +237,7 @@ DR-Venus builds on several strong open-source foundations:
 - [**Tongyi DeepResearch**](https://github.com/Alibaba-NLP/DeepResearch) -- deep research agent design references
 - [**REDSearcher**](https://github.com/RedSearchAgent/REDSearcher) -- open-data trajectories and related tooling
 
-## <img src="https://img.icons8.com/emoji/20/memo.png" width="18"/> Citation
+## 📝 Citation
 
 ```bibtex
 @misc{dr_venus_2026,
