@@ -1,0 +1,126 @@
+# =============================================================================
+# IGPO / DeepResearcher — runtime Python dependencies
+#
+# The torch / CUDA / flash-attn / vllm stack is intentionally NOT listed here
+# because their wheels are pinned to specific CUDA ABIs and must be installed
+# in the right order BEFORE this file. See README.md "Installation" for the
+# recommended sequence (typically: torch → flash-attn → vllm → this file).
+#
+# Install order on a fresh environment:
+#     pip install torch==<ver> --index-url https://download.pytorch.org/whl/cu<cuda>
+#     pip install flash-attn --no-build-isolation
+#     pip install vllm==<matching-ver>
+#     pip install -r requirements.txt
+# =============================================================================
+
+
+# -- Core training / RL / distributed --
+accelerate
+codetiming
+datasets
+hydra-core
+liger-kernel
+numpy<2.0.0
+omegaconf
+packaging>=20.0
+peft
+psutil
+pyarrow>=19.0.0
+pybind11
+ray[default]
+tensordict>=0.8.0,<=0.10.0,!=0.9.0
+torchdata
+transformers
+trl
+
+# -- HF / model utilities --
+einops
+filelock
+huggingface-hub
+Pillow
+safetensors
+sympy
+tqdm
+
+# -- Serving / async / RPC --
+aiohttp
+cachetools
+fastapi
+msgspec
+pydantic
+pyzmq
+regex
+starlette
+uvicorn
+
+# -- Experiment tracking / logging --
+pandas
+tensorboard
+wandb
+
+# -- Reward scoring --
+latex2sympy2_extended
+math_verify
+mathruler
+pylatexenc
+pyext
+
+# -- Agent loop / tool_server / LLM judge --
+json5
+openai
+python-dotenv
+qwen-agent
+requests
+tiktoken
+
+# -- Vision / multimodal (only needed when training VLM checkpoints) --
+qwen-vl-utils
+
+
+# =============================================================================
+# OPTIONAL extras — install manually only if you use the corresponding feature.
+# Uncomment the block you need, or install directly with pip on the side.
+# =============================================================================
+
+# --- Megatron backend (instead of the default FSDP backend) ---
+# megatron-core==0.13.2
+# mbridge
+# apex                       # NVIDIA Apex, for fused RMS norm on megatron
+
+# --- Alternative rollout backend ---
+# sglang
+
+# --- Alternative experiment trackers ---
+# clearml
+# mlflow
+# swanlab
+# trackio
+# weave
+
+# --- MCP (Model Context Protocol) tools ---
+# fastmcp
+# mcp
+
+# --- NVIDIA profiler ---
+# nvtx
+
+# --- Huawei Ascend NPU backend ---
+# torch_npu
+# mindspeed
+
+# --- ModelScope (China mainland HuggingFace mirror) ---
+# modelscope
+
+
+# =============================================================================
+# Removed from the previous requirements.txt (verified zero direct imports in
+# the whole DeepResearcher/ tree):
+#   dill        — pulled in transitively by ray / datasets
+#   pre-commit  — dev-only git-hook runner; keep in a separate dev-requirements
+#   pyyaml      — pulled in transitively by hydra-core / omegaconf
+#   tenacity, loguru, lmdb, ms-swift  — no references in the code base
+#   mammoth, pathvalidate, pdfminer.six, python-pptx, puremagic,
+#   pydub, SpeechRecognition, gradio, html2text
+#               — qwen-agent document-parser / audio / UI extras that this fork
+#                 does not exercise (we only use qwen_agent.tools.base).
+# =============================================================================

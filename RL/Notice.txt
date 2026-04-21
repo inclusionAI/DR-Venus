@@ -1,0 +1,14 @@
+IGPO: Information Gain-based Policy Optimization for Deep Research Agents
+
+This product includes software originally developed at:
+- IGPO: Copyright 2025 Wang et al.
+  (https://github.com/GuoqingWang1/IGPO)
+- verl: Copyright 2023-2024 Bytedance Ltd. and/or its affiliates
+  (https://github.com/volcengine/verl)
+- DeepResearcher: Copyright 2024 GAIR-NLP
+  (https://github.com/GAIR-NLP/DeepResearcher)
+- Tongyi DeepResearch: Copyright 2024 Alibaba-NLP
+  (https://github.com/Alibaba-NLP/DeepResearch)
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for the full license text.

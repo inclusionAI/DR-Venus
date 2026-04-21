@@ -1,0 +1,2 @@
+- name: dr_agent
+  _target_: scrl.llm_agent.dr_agent_loop.DRAgentLoop
