@@ -17,7 +17,7 @@
   <a href="https://huggingface.co/inclusionAI/DR-Venus-4B-RL">
     <img src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-DR--Venus--4B--RL-FFD21E" alt="DR-Venus-4B-RL">
   </a>
-  <a href="https://huggingface.co/collections/inclusionAI/DR-Venus">
+  <a href="https://huggingface.co/collections/inclusionAI/dr-venus">
     <img src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Collection-FFD21E" alt="Hugging Face Collection">
   </a>
   <a href="#">
