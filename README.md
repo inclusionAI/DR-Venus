@@ -72,8 +72,8 @@
 
 ## 🔥 News
 
+- **`2026-04-23`** &ensp; Our technical report is now available on [arXiv](https://arxiv.org/abs/2604.19859).
 - **`2026-04-22`** &ensp; Released model checkpoints: [`DR-Venus-4B-SFT`](https://huggingface.co/inclusionAI/DR-Venus-4B-SFT) and [`DR-Venus-4B-RL`](https://huggingface.co/inclusionAI/DR-Venus-4B-RL).
-- **`2026-04-22`** &ensp; Released the DR-Venus technical report.
 - **`2026-04-22`** &ensp; Open-sourced the full training and inference codebase.
 
 ## 📖 Overview
