@@ -30,6 +30,7 @@
   <a href="#-overview">Overview</a> &nbsp;|&nbsp;
   <a href="#-main-results">Main Results</a> &nbsp;|&nbsp;
   <a href="#-data-pipeline">Data Pipeline</a> &nbsp;|&nbsp;
+  <a href="#-demo">Demo</a> &nbsp;|&nbsp;
   <a href="#-quick-start">Quick Start</a> &nbsp;|&nbsp;
   <a href="#-citation">Citation</a>
 </p>
@@ -133,6 +134,14 @@ Raw REDSearcher Trajectories (10,001)
 ```
 
 For RL, we use open QA supervision curated from the [REDSearcher RL data source](https://huggingface.co/datasets/Zchu/REDSearcher_RL_1K).
+
+## ✨ Demo
+
+### DR-Venus Demo Video
+DeepResearch on problem:"《真探》第一季里有一句类似“useless spin”的台词出现在第几集？".  
+
+![DR-Venus Demo](./assets/DR-Venus_demo_final.gif)
+
 
 ## 🚀 Quick Start
 
