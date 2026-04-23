@@ -60,8 +60,8 @@ Requires Python 3.10+, CUDA-capable NVIDIA GPU(s), and ~80 GB disk for the
 base model and data.
 
 ```bash
-git clone <this-repo>
-cd <this-repo>
+git clone https://github.com/inclusionAI/DR-Venus
+cd DR-Venus/RL
 
 python -m venv .venv && source .venv/bin/activate    # or use conda
 pip install --upgrade pip
