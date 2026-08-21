@@ -38,6 +38,7 @@ model:
   trust_remote_code: False
   lora_rank: 0  # Set to positive value to enable LoRA (e.g., 32)
   lora_alpha: 16  # LoRA scaling factor
+  lora_dropout: 0.0
   target_modules: all-linear  # Target modules for LoRA adaptation
   use_liger: False
   strategy: fsdp2
@@ -59,6 +60,9 @@ trainer:
   total_training_steps: null
   logger: [ 'console', 'wandb' ]
   seed: 1
+  # Controls CuDNN deterministic mode in addition to Python/NumPy/torch/CUDA seeds.
+  # Exact bitwise equality still requires identical hardware and software builds.
+  deterministic: True
   save_freq: -1
   test_freq: -1
   nnodes: 1

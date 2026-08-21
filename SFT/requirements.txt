@@ -31,6 +31,7 @@ oss2
 tenacity
 pyyaml
 loguru
+json5
 openai
 html2text
 mammoth

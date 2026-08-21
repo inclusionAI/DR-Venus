@@ -1,0 +1,9 @@
+# CPU-only reproducibility, data, evaluation, and test tooling.
+# The CUDA/PyTorch/vLLM stack is intentionally recorded per run in
+# experiment_manifest.yaml because it must match the rented GPU image.
+numpy==1.26.4
+pandas==2.2.2
+pyarrow==16.1.0
+PyYAML==6.0.1
+pytest==7.4.4
+json5==0.9.6

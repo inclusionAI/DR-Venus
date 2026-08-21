@@ -6,7 +6,10 @@ Stages:
    search-result parser from the newer version).
 2. Duplicate search/visit tool-call removal (legacy post_clean behavior).
 3. Conversation validation.
-4. Length-based resampling.
+4. Optional correctness filtering from a field, offline cache, or explicit
+   OpenAI-compatible judge mode.
+5. Deterministic question-level train/validation/test splitting.
+6. Length-based resampling of the training split only.
 
 Supported input schemas:
 - raw: columns include `meta` and `messages`
@@ -25,6 +28,29 @@ from typing import Any
 import json5
 import numpy as np
 import pandas as pd
+
+try:
+    from .data_governance import (
+        DEFAULT_JUDGE_PROMPT_VERSION,
+        SPLIT_ALGORITHM,
+        CorrectnessEvaluator,
+        OpenAICompatibleJudge,
+        api_key_from_env,
+        logical_records_sha256,
+        sha256_file,
+        split_records_by_question,
+    )
+except ImportError:  # Support direct execution: python prepare_trajectories.py
+    from data_governance import (  # type: ignore[no-redef]
+        DEFAULT_JUDGE_PROMPT_VERSION,
+        SPLIT_ALGORITHM,
+        CorrectnessEvaluator,
+        OpenAICompatibleJudge,
+        api_key_from_env,
+        logical_records_sha256,
+        sha256_file,
+        split_records_by_question,
+    )
 
 
 DEFAULT_SYSTEM_PROMPT = """You are a deep research assistant. Your core function is to conduct thorough, multi-source investigations into any topic. You must handle both broad, open-domain inquiries and queries within specialized academic fields. For each user request, you must actively seek out and **cross-check information** from credible and diverse sources, then integrate the findings into a response that is comprehensive, accurate, well-structured, and objective. When you have gathered sufficient information and are ready to provide the definitive response, you must enclose the entire final answer in `<answer></answer>` tags.
@@ -741,7 +767,9 @@ def write_jsonl(df: pd.DataFrame, output_path: Path) -> None:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Clean, deduplicate, validate, and resample trajectory data.")
+    parser = argparse.ArgumentParser(
+        description="Clean, correctness-filter, split, and train-only-resample trajectory data."
+    )
     parser.add_argument("--input", "-i", required=True, help="Input parquet file or directory.")
     parser.add_argument("--output-dir", "-o", required=True, help="Output directory.")
     parser.add_argument("--file-pattern", default="train-*.parquet", help="Glob used when --input is a directory.")
@@ -757,8 +785,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--short-multiplier", type=int, default=1, help="Resampling multiplier for turns <= short-max-turns.")
     parser.add_argument("--medium-multiplier", type=int, default=2, help="Resampling multiplier for short-max-turns < turns <= medium-max-turns.")
     parser.add_argument("--long-multiplier", type=int, default=5, help="Resampling multiplier for turns > medium-max-turns.")
-    parser.add_argument("--shuffle", action="store_true", help="Shuffle the resampled output.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed used when --shuffle is enabled.")
+    parser.add_argument("--shuffle", action="store_true", help="Shuffle each output split deterministically.")
+    parser.add_argument("--seed", type=int, default=42, help="Seed used for question-level splitting and shuffling.")
+    parser.add_argument("--train-ratio", type=float, default=0.90, help="Question-group ratio assigned to train.")
+    parser.add_argument(
+        "--validation-ratio", type=float, default=0.05, help="Question-group ratio assigned to validation."
+    )
+    parser.add_argument("--test-ratio", type=float, default=0.05, help="Question-group ratio assigned to test.")
     parser.add_argument("--keep-intermediate", action="store_true", help="Write stage outputs before and after deduplication.")
     parser.add_argument("--keep-metadata", action="store_true", help="Keep debug metadata columns in the final output.")
     parser.add_argument("--write-jsonl", action="store_true", help="Also export the final dataset as JSONL.")
@@ -768,19 +801,145 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=list(DEFAULT_ALLOWED_TOOLS),
         help="Only these tool names are kept. Disallowed tool turns are removed together with their tool responses.",
     )
+    parser.add_argument(
+        "--correctness-mode",
+        choices=("none", "field", "cache", "judge"),
+        default="none",
+        help=(
+            "Correctness source. 'none' preserves legacy inclusion and never accesses the network; 'field' reads "
+            "an input column; 'cache' is strictly offline; 'judge' explicitly enables an OpenAI-compatible API."
+        ),
+    )
+    parser.add_argument(
+        "--correctness-field",
+        default="correctness",
+        help="Input field used by field mode; dotted paths such as meta.correctness are supported.",
+    )
+    parser.add_argument("--correctness-threshold", type=float, default=0.5, help="Minimum score retained.")
+    parser.add_argument(
+        "--judge-cache",
+        default=None,
+        help="JSON/JSONL correctness cache. Required by cache mode; read-through/write-through in judge mode.",
+    )
+    parser.add_argument(
+        "--judge-base-url",
+        default=None,
+        help="OpenAI-compatible /v1 base URL or full chat/completions endpoint; used only by judge mode.",
+    )
+    parser.add_argument("--judge-model", default=None, help="Judge model name; required by judge mode.")
+    parser.add_argument(
+        "--judge-api-key-env",
+        default="OPENAI_API_KEY",
+        help="Environment variable containing the judge API key. Literal keys are intentionally unsupported.",
+    )
+    parser.add_argument("--judge-timeout", type=float, default=60.0, help="Per-attempt judge timeout in seconds.")
+    parser.add_argument("--judge-retries", type=int, default=2, help="Judge retries after the first failed attempt.")
     return parser
 
 
-def main() -> None:
-    args = build_argument_parser().parse_args()
+def _records_dataframe(records: list[dict[str, Any]]) -> pd.DataFrame:
+    dataframe = pd.DataFrame(records)
+    for column in ("question", "messages", "gt"):
+        if column not in dataframe.columns:
+            dataframe[column] = pd.Series(dtype="object")
+    if "messages" in dataframe.columns:
+        dataframe["messages"] = dataframe["messages"].apply(deep_fix)
+    return dataframe
+
+
+def _public_output(dataframe: pd.DataFrame, *, keep_metadata: bool) -> pd.DataFrame:
+    if keep_metadata:
+        return dataframe.copy()
+    return dataframe[["question", "messages", "gt"]].copy()
+
+
+def _resample_training_records(
+    records: list[dict[str, Any]],
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    resampled_rows = []
+    original_bucket_counts: defaultdict[str, int] = defaultdict(int)
+    resampled_bucket_counts: defaultdict[str, int] = defaultdict(int)
+    multiplier_counts: Counter[str] = Counter()
+
+    for record in records:
+        turns = int(record["_turns"])
+        multiplier = compute_multiplier(
+            turns,
+            args.short_max_turns,
+            args.medium_max_turns,
+            args.short_multiplier,
+            args.medium_multiplier,
+            args.long_multiplier,
+        )
+        if multiplier < 1:
+            raise ValueError("resampling multipliers must all be at least 1")
+
+        if turns <= args.short_max_turns:
+            bucket = f"0-{args.short_max_turns}"
+        elif turns <= args.medium_max_turns:
+            bucket = f"{args.short_max_turns + 1}-{args.medium_max_turns}"
+        else:
+            bucket = f">{args.medium_max_turns}"
+
+        original_bucket_counts[bucket] += 1
+        multiplier_counts[str(multiplier)] += 1
+        for sample_copy in range(multiplier):
+            new_record = dict(record)
+            new_record["_resample_multiplier"] = multiplier
+            new_record["_sample_copy"] = sample_copy
+            resampled_rows.append(new_record)
+            resampled_bucket_counts[bucket] += 1
+
+    return resampled_rows, {
+        "turn_buckets": {
+            "original": dict(original_bucket_counts),
+            "resampled": dict(resampled_bucket_counts),
+        },
+        "multiplier_distribution": dict(multiplier_counts),
+    }
+
+
+def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+    """Run the pipeline from a parsed namespace and return stats for tests/callers."""
+
     input_path = Path(args.input).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     allowed_tools = {tool.lower() for tool in args.allowed_tools}
+    if args.short_max_turns < 0 or args.medium_max_turns < args.short_max_turns:
+        raise ValueError("turn thresholds must satisfy 0 <= short-max-turns <= medium-max-turns")
+    if min(args.short_multiplier, args.medium_multiplier, args.long_multiplier) < 1:
+        raise ValueError("resampling multipliers must all be at least 1")
+    ratio_sum = args.train_ratio + args.validation_ratio + args.test_ratio
+    if min(args.train_ratio, args.validation_ratio, args.test_ratio) < 0 or abs(ratio_sum - 1.0) > 1e-9:
+        raise ValueError(f"split ratios must be non-negative and sum to 1.0, got {ratio_sum}")
 
     files = list_input_files(input_path, args.file_pattern)
     if not files:
         raise FileNotFoundError(f"No input files found under {input_path} with pattern {args.file_pattern!r}")
+
+    cache_path = Path(args.judge_cache).expanduser().resolve() if args.judge_cache else None
+    judge = None
+    if args.correctness_mode == "judge":
+        if not args.judge_base_url or not args.judge_model:
+            raise ValueError("judge mode requires both --judge-base-url and --judge-model")
+        judge = OpenAICompatibleJudge(
+            base_url=args.judge_base_url,
+            model=args.judge_model,
+            api_key=api_key_from_env(args.judge_api_key_env),
+            timeout=args.judge_timeout,
+            retries=args.judge_retries,
+        )
+    correctness_evaluator = CorrectnessEvaluator(
+        mode=args.correctness_mode,
+        field=args.correctness_field,
+        threshold=args.correctness_threshold,
+        cache_path=cache_path,
+        prompt_version=DEFAULT_JUDGE_PROMPT_VERSION,
+        judge=judge,
+        judge_model=args.judge_model,
+    )
 
     template_system_prompt = build_system_prompt(args.current_date)
 
@@ -790,15 +949,28 @@ def main() -> None:
     duplicate_counter = Counter()
     pruned_tool_counter = Counter()
     tool_counter = Counter()
+    correctness_counter = Counter()
+    structurally_valid_rows = 0
     per_file_stats = {}
+    source_descriptors = []
 
     for file_path in files:
         df = pd.read_parquet(file_path)
+        source_descriptors.append(
+            {
+                "file": file_path.name,
+                "rows": int(len(df)),
+                "bytes": int(file_path.stat().st_size),
+                "sha256": sha256_file(file_path),
+            }
+        )
         file_stats = {
             "source_rows": len(df),
             "stage1_rows": 0,
+            "structurally_valid_rows": 0,
             "stage2_rows": 0,
             "dropped": Counter(),
+            "correctness": Counter(),
             "pruned_tool_turns_removed": 0,
             "pruned_tool_response_turns_removed": 0,
             "duplicate_tool_turns_removed": 0,
@@ -843,6 +1015,21 @@ def main() -> None:
                 continue
 
             deduped_row["_turns"] = compute_turns(deduped_messages)
+            structurally_valid_rows += 1
+            file_stats["structurally_valid_rows"] += 1
+
+            decision = correctness_evaluator.evaluate(row, deduped_row)
+            correctness_counter[f"source:{decision.source}"] += 1
+            correctness_counter[f"reason:{decision.reason}"] += 1
+            file_stats["correctness"][decision.reason] += 1
+            if not decision.keep:
+                dropped_counter[decision.reason] += 1
+                file_stats["dropped"][decision.reason] += 1
+                continue
+            deduped_row["_correctness_source"] = decision.source
+            deduped_row["_correctness_score"] = decision.score
+            deduped_row["_correctness_cache_key"] = decision.cache_key
+
             for message in deduped_messages:
                 if message.get("role") != "assistant":
                     continue
@@ -855,6 +1042,7 @@ def main() -> None:
             file_stats["stage2_rows"] += 1
 
         file_stats["dropped"] = dict(file_stats["dropped"])
+        file_stats["correctness"] = dict(file_stats["correctness"])
         per_file_stats[file_path.name] = file_stats
         print(
             f"{file_path.name}: source={file_stats['source_rows']} "
@@ -863,8 +1051,8 @@ def main() -> None:
             f"duplicates_removed={file_stats['duplicate_tool_turns_removed']}"
         )
 
-    stage1_df = pd.DataFrame(stage1_rows)
-    stage2_df = pd.DataFrame(stage2_rows)
+    stage1_df = _records_dataframe(stage1_rows)
+    stage2_df = _records_dataframe(stage2_rows)
 
     if args.keep_intermediate:
         if not stage1_df.empty:
@@ -872,57 +1060,56 @@ def main() -> None:
         if not stage2_df.empty:
             stage2_df.to_parquet(output_dir / "stage2_deduped.parquet", index=False)
 
-    resampled_rows = []
-    original_bucket_counts = defaultdict(int)
-    resampled_bucket_counts = defaultdict(int)
-    multiplier_counts = Counter()
+    ratios = {
+        "train": args.train_ratio,
+        "validation": args.validation_ratio,
+        "test": args.test_ratio,
+    }
+    split_records, question_assignments = split_records_by_question(stage2_rows, seed=args.seed, ratios=ratios)
+    train_clean_records = split_records["train"]
+    train_resampled_records, resample_stats = _resample_training_records(train_clean_records, args)
 
-    for record in stage2_df.to_dict("records"):
-        turns = int(record["_turns"])
-        multiplier = compute_multiplier(
-            turns,
-            args.short_max_turns,
-            args.medium_max_turns,
-            args.short_multiplier,
-            args.medium_multiplier,
-            args.long_multiplier,
-        )
+    split_dataframes = {
+        "train_clean": _records_dataframe(train_clean_records),
+        "train_resampled": _records_dataframe(train_resampled_records),
+        "validation": _records_dataframe(split_records["validation"]),
+        "test": _records_dataframe(split_records["test"]),
+    }
+    if args.shuffle:
+        for offset, name in enumerate(split_dataframes):
+            dataframe = split_dataframes[name]
+            if not dataframe.empty:
+                split_dataframes[name] = dataframe.sample(
+                    frac=1.0, random_state=args.seed + offset
+                ).reset_index(drop=True)
 
-        if turns <= args.short_max_turns:
-            bucket = f"0-{args.short_max_turns}"
-        elif turns <= args.medium_max_turns:
-            bucket = f"{args.short_max_turns + 1}-{args.medium_max_turns}"
-        else:
-            bucket = f">{args.medium_max_turns}"
+    output_dataframes = {
+        name: _public_output(dataframe, keep_metadata=args.keep_metadata)
+        for name, dataframe in split_dataframes.items()
+    }
+    artifact_paths = {
+        "train_clean": output_dir / "train_clean.parquet",
+        "train_resampled": output_dir / "train_resampled.parquet",
+        "validation": output_dir / "validation.parquet",
+        "test": output_dir / "test.parquet",
+        # Preserve the historical path while making its role unambiguous: it is
+        # now an alias of the leakage-free, resampled training split.
+        "legacy_train_resampled": output_dir / "cleaned_resampled.parquet",
+    }
+    for name in ("train_clean", "train_resampled", "validation", "test"):
+        output_dataframes[name].to_parquet(artifact_paths[name], index=False)
+    output_dataframes["train_resampled"].to_parquet(artifact_paths["legacy_train_resampled"], index=False)
 
-        original_bucket_counts[bucket] += 1
-        multiplier_counts[str(multiplier)] += 1
-
-        for sample_copy in range(multiplier):
-            new_record = dict(record)
-            new_record["_resample_multiplier"] = multiplier
-            new_record["_sample_copy"] = sample_copy
-            resampled_rows.append(new_record)
-            resampled_bucket_counts[bucket] += 1
-
-    final_df = pd.DataFrame(resampled_rows)
-    if args.shuffle and not final_df.empty:
-        final_df = final_df.sample(frac=1.0, random_state=args.seed).reset_index(drop=True)
-
-    for column in ("messages",):
-        if column in final_df.columns:
-            final_df[column] = final_df[column].apply(deep_fix)
-
-    if args.keep_metadata:
-        final_output_df = final_df
-    else:
-        keep_columns = [column for column in ("question", "messages", "gt") if column in final_df.columns]
-        final_output_df = final_df[keep_columns]
-
-    final_parquet = output_dir / "cleaned_resampled.parquet"
-    final_output_df.to_parquet(final_parquet, index=False)
     if args.write_jsonl:
-        write_jsonl(final_output_df, output_dir / "cleaned_resampled.jsonl")
+        for name in ("train_clean", "train_resampled", "validation", "test"):
+            jsonl_path = output_dir / f"{name}.jsonl"
+            write_jsonl(output_dataframes[name], jsonl_path)
+        legacy_jsonl = output_dir / "cleaned_resampled.jsonl"
+        write_jsonl(output_dataframes["train_resampled"], legacy_jsonl)
+
+    question_split_counts = Counter(question_assignments.values())
+    final_output_df = output_dataframes["train_resampled"]
+    final_parquet = artifact_paths["legacy_train_resampled"]
 
     stats = {
         "input": str(input_path),
@@ -941,7 +1128,12 @@ def main() -> None:
         "rows": {
             "source": int(sum(item["source_rows"] for item in per_file_stats.values())),
             "stage1_normalized": int(len(stage1_df)),
-            "stage2_valid": int(len(stage2_df)),
+            "structurally_valid": int(structurally_valid_rows),
+            "stage2_correctness_kept": int(len(stage2_df)),
+            "train_clean": int(len(output_dataframes["train_clean"])),
+            "train_resampled": int(len(output_dataframes["train_resampled"])),
+            "validation": int(len(output_dataframes["validation"])),
+            "test": int(len(output_dataframes["test"])),
             "final_resampled": int(len(final_output_df)),
         },
         "pruned_tool_turns_removed": int(pruned_tool_counter["pruned_tool_turns_removed"]),
@@ -953,28 +1145,123 @@ def main() -> None:
         },
         "duplicate_tool_turns_removed": int(duplicate_counter["duplicate_tool_turns_removed"]),
         "drop_reasons": dict(dropped_counter),
-        "tools_after_cleaning": dict(tool_counter),
-        "turn_buckets": {
-            "original": dict(original_bucket_counts),
-            "resampled": dict(resampled_bucket_counts),
+        "correctness": {
+            "mode": args.correctness_mode,
+            "field": args.correctness_field if args.correctness_mode == "field" else None,
+            "threshold": args.correctness_threshold,
+            "prompt_version": DEFAULT_JUDGE_PROMPT_VERSION,
+            "source_counts": {
+                key.removeprefix("source:"): value
+                for key, value in correctness_counter.items()
+                if key.startswith("source:")
+            },
+            "decision_counts": {
+                key.removeprefix("reason:"): value
+                for key, value in correctness_counter.items()
+                if key.startswith("reason:")
+            },
         },
-        "multiplier_distribution": dict(multiplier_counts),
+        "tools_after_cleaning": dict(tool_counter),
+        "split": {
+            "unit": "normalized_question",
+            "algorithm": SPLIT_ALGORITHM,
+            "seed": args.seed,
+            "ratios": ratios,
+            "question_groups": dict(question_split_counts),
+        },
+        **resample_stats,
         "per_file": per_file_stats,
         "artifacts": {
             "final_parquet": str(final_parquet),
             "final_jsonl": str(output_dir / "cleaned_resampled.jsonl") if args.write_jsonl else None,
+            "train_clean_parquet": str(artifact_paths["train_clean"]),
+            "train_resampled_parquet": str(artifact_paths["train_resampled"]),
+            "validation_parquet": str(artifact_paths["validation"]),
+            "test_parquet": str(artifact_paths["test"]),
             "stage1_parquet": str(output_dir / "stage1_normalized.parquet") if args.keep_intermediate else None,
             "stage2_parquet": str(output_dir / "stage2_deduped.parquet") if args.keep_intermediate else None,
         },
     }
 
     stats_path = output_dir / "stats.json"
+
+    artifact_manifest = {}
+    for name, path in artifact_paths.items():
+        logical_name = "train_resampled" if name == "legacy_train_resampled" else name
+        artifact_manifest[name] = {
+            "file": path.name,
+            "rows": int(len(output_dataframes[logical_name])),
+            "sha256": sha256_file(path),
+            "logical_sha256": logical_records_sha256(output_dataframes[logical_name].to_dict("records")),
+        }
+    cache_manifest = None
+    if cache_path is not None and cache_path.exists():
+        cache_manifest = {
+            "file": cache_path.name,
+            "sha256": sha256_file(cache_path),
+            "used_judge_models": sorted(correctness_evaluator.used_cache_judge_models),
+            "used_prompt_versions": sorted(correctness_evaluator.used_cache_prompt_versions),
+        }
+    data_manifest = {
+        "schema_version": 1,
+        "sources": source_descriptors,
+        "counts": {
+            "source_rows": int(sum(item["source_rows"] for item in per_file_stats.values())),
+            "normalized_rows": int(len(stage1_df)),
+            "structurally_valid_rows": int(structurally_valid_rows),
+            "correctness_kept_rows": int(len(stage2_df)),
+            "correctness_dropped_rows": int(structurally_valid_rows - len(stage2_df)),
+            "unique_questions": int(len(question_assignments)),
+            "question_groups_by_split": {name: int(question_split_counts.get(name, 0)) for name in ratios},
+            "rows_by_split": {
+                "train_clean": int(len(output_dataframes["train_clean"])),
+                "train_resampled": int(len(output_dataframes["train_resampled"])),
+                "validation": int(len(output_dataframes["validation"])),
+                "test": int(len(output_dataframes["test"])),
+            },
+        },
+        "split": {
+            "unit": "normalized_question",
+            "normalization": "NFKC + whitespace collapse + casefold",
+            "algorithm": SPLIT_ALGORITHM,
+            "seed": args.seed,
+            "ratios": ratios,
+            "resampling_applied_to": "train_only",
+        },
+        "correctness": {
+            "mode": args.correctness_mode,
+            "field": args.correctness_field if args.correctness_mode == "field" else None,
+            "threshold": args.correctness_threshold,
+            "cache": cache_manifest,
+            "judge": (
+                {"protocol": "openai-compatible", "model": args.judge_model}
+                if args.correctness_mode == "judge"
+                else None
+            ),
+            "prompt_version": DEFAULT_JUDGE_PROMPT_VERSION,
+            "decision_counts": stats["correctness"]["decision_counts"],
+        },
+        "resample_policy": stats["resample_policy"],
+        "artifacts": artifact_manifest,
+    }
+    manifest_path = output_dir / "data_manifest.json"
+    manifest_path.write_text(json.dumps(data_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    stats["artifacts"]["data_manifest"] = str(manifest_path)
     stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Saved final parquet to: {final_parquet}")
     if args.write_jsonl:
         print(f"Saved final jsonl to: {output_dir / 'cleaned_resampled.jsonl'}")
+    print(f"Saved validation parquet to: {artifact_paths['validation']}")
+    print(f"Saved test parquet to: {artifact_paths['test']}")
     print(f"Saved stats to: {stats_path}")
+    print(f"Saved data manifest to: {manifest_path}")
+    return stats
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_argument_parser().parse_args(argv)
+    run_pipeline(args)
 
 
 if __name__ == "__main__":

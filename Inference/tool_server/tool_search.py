@@ -3,20 +3,27 @@ License: This code is adapted from Tongyi DeepResearch:
 https://github.com/Alibaba-NLP/DeepResearch/blob/main/inference/tool_search.py
 '''
 
-import json
-from typing import List, Union
-from qwen_agent.tools.base import BaseTool, register_tool
-
-from typing import Dict, List, Optional, Union
-
 import http.client
 import json
-from dotenv import load_dotenv
-
 import os
+from typing import List, Optional, Union
+
+from dotenv import load_dotenv
+from qwen_agent.tools.base import BaseTool, register_tool
+
+try:
+    from .deadline import ToolDeadline, ToolTimeoutError, positive_timeout
+except ImportError:  # Support ``python Inference/run_demo.py``.
+    from tool_server.deadline import ToolDeadline, ToolTimeoutError, positive_timeout
+
+
 load_dotenv()
 
-SERPER_KEY=os.environ.get('SERPER_KEY_ID')
+SERPER_KEY = os.environ.get("SERPER_KEY_ID")
+SERPER_TIMEOUT_SECONDS = positive_timeout(
+    os.environ.get("SERPER_TIMEOUT_SECONDS", os.environ.get("TOOL_TIMEOUT_SECONDS", 150)),
+    name="SERPER_TIMEOUT_SECONDS",
+)
 #print("SERPER_KEY",SERPER_KEY)
 
 
@@ -40,10 +47,14 @@ class Search(BaseTool):
 
     def __init__(self, cfg: Optional[dict] = None):
         super().__init__(cfg)
-    def google_search_with_serp(self, query: str):
+    def google_search_with_serp(
+        self, query: str, *, deadline: ToolDeadline | None = None
+    ) -> str:
+        deadline = deadline or ToolDeadline.start(SERPER_TIMEOUT_SECONDS)
+
         def contains_chinese_basic(text: str) -> bool:
             return any('\u4E00' <= char <= '\u9FFF' for char in text)
-        conn = http.client.HTTPSConnection("google.serper.dev")
+
         if contains_chinese_basic(query):
             payload = json.dumps({
                 "q": query,
@@ -65,19 +76,32 @@ class Search(BaseTool):
             }
         
         
-        for i in range(5):
+        last_error: Exception | None = None
+        for attempt in range(5):
+            conn = http.client.HTTPSConnection(
+                "google.serper.dev", timeout=deadline.remaining()
+            )
             try:
                 conn.request("POST", "/search", payload, headers)
                 res = conn.getresponse()
+                data = res.read()
+                if res.status < 200 or res.status >= 300:
+                    raise RuntimeError(f"Serper returned HTTP {res.status}")
+                results = json.loads(data.decode("utf-8"))
                 break
             except Exception as e:
-                print(e)
-                if i == 4:
-                    return f"Google search Timeout, return None, Please try again later."
-                continue
-    
-        data = res.read()
-        results = json.loads(data.decode("utf-8"))
+                last_error = e
+                if attempt == 4:
+                    if isinstance(e, TimeoutError):
+                        raise ToolTimeoutError(
+                            f"search timed out after {deadline.timeout_seconds:g} seconds"
+                        ) from e
+                    raise RuntimeError(f"Serper search failed after 5 attempts: {e}") from e
+            finally:
+                conn.close()
+
+        if last_error is not None and "results" not in locals():
+            raise RuntimeError(f"Serper search failed: {last_error}")
 
         try:
             if "organic" not in results:
@@ -111,11 +135,17 @@ class Search(BaseTool):
 
 
     
-    def search_with_serp(self, query: str):
-        result = self.google_search_with_serp(query)
+    def search_with_serp(
+        self, query: str, *, deadline: ToolDeadline | None = None
+    ) -> str:
+        result = self.google_search_with_serp(query, deadline=deadline)
         return result
 
     def call(self, params: Union[str, dict], **kwargs) -> str:
+        timeout = positive_timeout(
+            kwargs.get("timeout", SERPER_TIMEOUT_SECONDS), name="search timeout"
+        )
+        deadline = ToolDeadline.start(timeout)
         try:
             query = params["query"]
             #print(query)
@@ -124,14 +154,15 @@ class Search(BaseTool):
         
         if isinstance(query, str):
             # 单个查询
-            response = self.search_with_serp(query)
+            response = self.search_with_serp(query, deadline=deadline)
         else:
             # 多个查询
-            assert isinstance(query, List)
+            if not isinstance(query, list):
+                return "[Search] Invalid request format: 'query' must be a string or array"
             responses = []
             for q in query:
-                responses.append(self.search_with_serp(q))
+                responses.append(self.search_with_serp(q, deadline=deadline))
             response = "\n=======\n".join(responses)
-            print("response is :",response)
-            
+
+        deadline.remaining()
         return response

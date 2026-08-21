@@ -56,11 +56,15 @@ _PASSTHROUGH_FROM_OS = [
     "API_KEY", "API_BASE", "SUMMARY_MODEL_NAME",
     # LLM judge (optional separate gateway + model selector + thinking toggle)
     "JUDGE_API_KEY", "JUDGE_API_BASE", "JUDGE_MODEL_NAME", "ENABLE_JUDGE_THINKING",
+    "JUDGE_PROVIDER_ID",
+    "JUDGE_CACHE_MODE", "JUDGE_CACHE_PATH", "JUDGE_SEED", "JUDGE_TIMEOUT_SECONDS",
     # Web search (Serper) — note: tool_search.py freezes this at import time
     "SERPER_KEY_ID",
     # Web visit (Jina)
     "JINA_API_KEYS", "PROXY",
     "VISIT_SERVER_TIMEOUT", "VISIT_SERVER_MAX_RETRIES", "WEBCONTENT_MAXLENGTH",
+    # Deterministic external-tool record/replay (non-secret controls)
+    "TOOL_CACHE_MODE", "TOOL_CACHE_PATH", "ROLLOUT_TURN_JITTER",
     # Distributed networking (Gloo/NCCL NIC selection)
     "GLOO_SOCKET_IFNAME",
 ]

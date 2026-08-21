@@ -44,6 +44,7 @@ from verl.single_controller.ray.base import create_colocated_worker_cls
 from verl.trainer.config import AlgoConfig
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
+from verl.trainer.ppo.format_penalty import replacement_format_penalty
 from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
     compute_throughout_metrics,
@@ -298,6 +299,8 @@ def compute_advantage(
             adv_kwargs["index"] = data.non_tensor_batch["uid"]
         if "reward_baselines" in data.batch:  # optional
             adv_kwargs["reward_baselines"] = data.batch["reward_baselines"]
+        if "ig_boundary_positions" in data.non_tensor_batch:
+            adv_kwargs["ig_boundary_positions"] = data.non_tensor_batch["ig_boundary_positions"]
 
         # calculate advantage estimator
         result = adv_estimator_fn(**adv_kwargs)
@@ -1969,7 +1972,9 @@ class RayPPOTrainer:
                     content = asst_msg.get('content', '')
                     _fmt_total_checked += 1
                     if not check_turn_format(content, False):
-                        ig_rewards[si][j] = -1.0 * _format_penalty_scale
+                        ig_rewards[si][j] = replacement_format_penalty(
+                            _format_penalty_scale
+                        )
                         _fmt_penalty_count += 1
 
                 # Answer turn: penalty overrides outcome reward at scores[-1]
@@ -1983,7 +1988,9 @@ class RayPPOTrainer:
                         content = answer_msg.get('content', '')
                         _fmt_total_checked += 1
                         if not check_turn_format(content, True):
-                            _answer_fmt_penalties[si] = -1.0 * _format_penalty_scale
+                            _answer_fmt_penalties[si] = replacement_format_penalty(
+                                _format_penalty_scale
+                            )
                             _fmt_penalty_count += 1
 
         # Count total boundaries for summary
@@ -2292,7 +2299,9 @@ class RayPPOTrainer:
                                                         if asst_msg.get('role') != 'assistant':
                                                             continue
                                                         if not check_turn_format(asst_msg.get('content', ''), False):
-                                                            ig_rewards[si][j] = -1.0 * _fmt_scale
+                                                            ig_rewards[si][j] = replacement_format_penalty(
+                                                                _fmt_scale
+                                                            )
                                                             _fmt_penalty_count += 1
                                                     # Answer turn
                                                     answer_step = len(tbs) - 1
@@ -2303,7 +2312,9 @@ class RayPPOTrainer:
                                                         answer_msg = msgs[answer_msg_idx]
                                                         if answer_msg.get('role') == 'assistant':
                                                             if not check_turn_format(answer_msg.get('content', ''), True):
-                                                                answer_fmt_penalties[si] = -1.0 * _fmt_scale
+                                                                answer_fmt_penalties[si] = replacement_format_penalty(
+                                                                    _fmt_scale
+                                                                )
                                                                 _fmt_penalty_count += 1
                                             # Re-serialize ig_arr (format penalty may have modified entries)
                                             ig_arr = np.empty(len(ig_rewards), dtype=object)
@@ -2726,7 +2737,14 @@ class RayPPOTrainer:
                         _ig_status = reward_extra_infos_dict.pop("_ig_status", None) if reward_extra_infos_dict else None
                         _outcome_scores = reward_extra_infos_dict.pop("outcome_score", None) if reward_extra_infos_dict else None
                         if reward_extra_infos_dict:
-                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+                            batch.non_tensor_batch.update(
+                                {
+                                    key: np.array(value, dtype=object)
+                                    if key == "ig_boundary_positions"
+                                    else np.array(value)
+                                    for key, value in reward_extra_infos_dict.items()
+                                }
+                            )
 
                         if _outcome_scores is not None:
                             _os = np.array(_outcome_scores)

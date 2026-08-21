@@ -13,7 +13,6 @@ import itertools
 import json
 import json5
 import os
-import random
 import re
 import threading
 import time
@@ -27,6 +26,8 @@ from verl.experimental.agent_loop.agent_loop import (
     register,
 )
 from verl.utils.profiler import simple_timer
+from scrl.llm_agent.tool_runtime import execute_tool_call
+from scrl.llm_agent.turn_budget import resolve_turn_limit, turn_jitter_from_env
 
 # ---------- Constants (mirrored from generation.py) ----------
 
@@ -173,6 +174,7 @@ class DRAgentLoop(AgentLoopBase):
         cls.tokenizer = tokenizer
         cls.processor = processor
         cls.max_turns_base = config.max_turns
+        cls._turn_jitter = turn_jitter_from_env()
         cls.max_len = config.data.max_model_len
         cls.response_length = config.actor_rollout_ref.rollout.response_length
         cls.codeact_env_disabled = config.codeact_env_disabled
@@ -354,7 +356,7 @@ class DRAgentLoop(AgentLoopBase):
         response_mask: list[int] = []
         turn_boundaries: list[dict] = []
 
-        max_turns = max(1, int(random.random() * 10 - 5) + self.max_turns_base)
+        max_turns = resolve_turn_limit(self.max_turns_base, jitter=self._turn_jitter)
         t_gen_total = 0.0
         t_tool_total = 0.0
         t_prefill_total = 0.0
@@ -821,31 +823,37 @@ class DRAgentLoop(AgentLoopBase):
     async def _call_tool(
         self, question: str, thinking: str, tool_call: dict, total_number: int
     ) -> str:
-        """Execute a single tool call via the open-source tool_server
-        (synchronous ``custom_call_tool``, wrapped in ``run_in_executor``).
+        """Execute one tool call with a provider-level end-to-end deadline.
+
+        The synchronous dispatcher passes the budget into each HTTP client and
+        retry loop.  ``asyncio.wait_for`` remains a slightly looser event-loop
+        safety net; it is not the primary timeout mechanism because cancelling
+        an executor Future does not stop its underlying thread.
 
         The ``question`` / ``thinking`` / ``total_number`` args are kept for
         signature-compat with older callers but are unused by the new
         function-based tool interface (only ``tool_call`` is consumed).
         """
 
-        def _sync_call():
-            try:
-                from tool_server.execute_tools import custom_call_tool
-                content = custom_call_tool(tool_call)
-                if content is None:
-                    return "Tool returned empty response"
-                if isinstance(content, list):
-                    content = "\n".join(str(c) for c in content)
-                return content if isinstance(content, str) else str(content)
-            except Exception as e:
-                return f"Tool execution error: {repr(e)}"
-
         _timeout = self.__class__._tool_timeout
+
+        def _sync_call():
+            from tool_server.execute_tools import custom_call_tool
+
+            return execute_tool_call(
+                tool_call,
+                custom_call_tool,
+                timeout_seconds=_timeout,
+            ).content
+
+        # Allow provider cleanup/cache error recording to finish after the
+        # exact provider deadline.  Reaching this guard indicates a transport
+        # failed to honor its socket/client timeout.
+        _fallback_timeout = _timeout + min(5.0, max(0.5, _timeout * 0.05))
         try:
             result = await asyncio.wait_for(
                 self.loop.run_in_executor(None, _sync_call),
-                timeout=_timeout,
+                timeout=_fallback_timeout,
             )
         except asyncio.TimeoutError:
             result = f"Tool execution timed out after {_timeout:.0f} seconds."

@@ -41,6 +41,13 @@
 
 **DR-Venus** is a **4B-parameter** deep research agent trained *entirely on open data*. It establishes a new small-model frontier on multiple deep research benchmarks, demonstrating that strong agentic capabilities can emerge from careful data curation and effective training strategies at edge scale.
 
+> [!NOTE]
+> This fork includes a clearly attributed, budget-matched personal reproduction
+> track. It adds auditable data splits, tool record/replay, fixed evaluation
+> artifacts, dry-run-first SFT/RL ablations, tests, and interview documentation.
+> Start at [`docs/README.md`](docs/README.md). Personal 32K/12-turn results must
+> not be presented as reproductions of the official 200K+/200-turn scores.
+
 <p align="center">
   <img src="assets/dr-venus-overview.png" alt="DR-Venus overview figure" width="900"/>
 </p>
@@ -155,7 +162,7 @@ Run the trained model with `search` and `visit` tools:
 cd Inference
 pip install -r requirements.txt
 
-# Configure API credentials used by the tool server first
+# Configure API credentials used by the tool server first; this defaults to a dry run
 bash run_demo.sh
 
 # Or launch the web demo
@@ -178,7 +185,7 @@ python data_clean/prepare_trajectories.py \
   --input <RAW_PARQUET_OR_DIR> \
   --output-dir <OUTPUT_DIR>
 
-# Run supervised fine-tuning
+# Print the supervised fine-tuning command (live execution is explicit)
 bash train_sft.sh
 ```
 
@@ -192,7 +199,7 @@ Continue from the SFT checkpoint with long-horizon RL:
 cd RL
 pip install -r requirements.txt
 
-# Edit .env and train_igpo.sh first
+# Edit .env first; this defaults to a dry run
 bash train_igpo.sh
 ```
 

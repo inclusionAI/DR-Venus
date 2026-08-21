@@ -44,6 +44,8 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
 
 import verl.utils.hdfs_io as hdfs_io
+from verl.model_merger.lora_provenance import normalize_lora_config, write_lora_provenance
+from verl.trainer.sft_reproducibility import dataloader_seed_components, seed_everything
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, get_checkpoint_tracker_filename
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.dataset import SFTDataset
@@ -169,11 +171,20 @@ class FSDPSFTTrainer:
         if self.device_mesh.get_rank() == 0:
             print(f"Using FSDP rank {rank} and size {world_size} for data distribution")
 
+        seed = int(self.config.trainer.seed)
+        train_generator, train_worker_init = dataloader_seed_components(seed, rank=rank, stream=0)
+        val_generator, val_worker_init = dataloader_seed_components(seed, rank=rank, stream=1)
+
         # Set pin_memory_device when pin_memory is enabled.
         device_name = get_device_name()
 
         self.train_sampler = DistributedSampler(
-            self.train_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True
+            self.train_dataset,
+            shuffle=False,
+            num_replicas=world_size,
+            rank=rank,
+            drop_last=True,
+            seed=seed,
         )
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
@@ -183,10 +194,17 @@ class FSDPSFTTrainer:
             pin_memory=True,
             drop_last=True,
             pin_memory_device=device_name,
+            generator=train_generator,
+            worker_init_fn=train_worker_init,
         )
 
         self.val_sampler = DistributedSampler(
-            self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True
+            self.val_dataset,
+            shuffle=False,
+            num_replicas=world_size,
+            rank=rank,
+            drop_last=True,
+            seed=seed,
         )
         self.val_dataloader = StatefulDataLoader(
             dataset=self.val_dataset,
@@ -196,6 +214,8 @@ class FSDPSFTTrainer:
             pin_memory=True,
             drop_last=True,
             pin_memory_device=device_name,
+            generator=val_generator,
+            worker_init_fn=val_worker_init,
         )
 
     def _build_model_optimizer(self):
@@ -230,6 +250,7 @@ class FSDPSFTTrainer:
             use_meta_tensor=not config.tie_word_embeddings, mesh=self.device_mesh
         )
 
+        self.lora_adapter_config = None
         with init_context():
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 local_model_path,
@@ -257,10 +278,12 @@ class FSDPSFTTrainer:
                     "task_type": TaskType.CAUSAL_LM,
                     "r": self.config.model.lora_rank,
                     "lora_alpha": self.config.model.lora_alpha,
+                    "lora_dropout": self.config.model.get("lora_dropout", 0.0),
                     "target_modules": convert_to_regular_types(self.config.model.target_modules),
                     "bias": "none",
                 }
                 self.model = get_peft_model(self.model, LoraConfig(**lora_config))
+                self.lora_adapter_config = normalize_lora_config(self.model.peft_config["default"])
                 self.model = self.model.to(torch_dtype)
 
         if self.config.model.enable_gradient_checkpointing:
@@ -559,6 +582,9 @@ class FSDPSFTTrainer:
         # Save dataloader state
         if self.device_mesh.get_rank() == 0:
             local_mkdir_safe(local_global_step_folder)
+            if self.lora_adapter_config is not None:
+                provenance_path = write_lora_provenance(local_global_step_folder, self.lora_adapter_config)
+                print(f"Saved LoRA provenance to: {provenance_path}")
             dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
 
             # Use StatefulDataLoader's built-in state dict functionality
@@ -803,6 +829,13 @@ class FSDPSFTTrainer:
 def run_sft(config):
     device_name = get_device_name()
     local_rank, rank, world_size = initialize_global_process_group()
+
+    # Use one model-initialization seed across all ranks. Data-loader workers
+    # receive rank-specific derived seeds in ``_build_dataloader``.
+    seed_everything(
+        int(config.trainer.seed),
+        deterministic=bool(config.trainer.get("deterministic", True)),
+    )
 
     device_mesh = init_device_mesh(device_type=device_name, mesh_shape=(world_size,), mesh_dim_names=("fsdp",))
     dp_size = world_size // config.ulysses_sequence_parallel_size

@@ -62,6 +62,7 @@ class NaiveBatchRewardManager:
         else:
             reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
+        ig_boundary_positions = [[] for _ in range(len(data))]
 
         already_print_data_sources = {}
 
@@ -236,6 +237,14 @@ class NaiveBatchRewardManager:
                     resp_tensor = data.batch["responses"][global_idx]
                     orig_ids = resp_tensor[:orig_len].tolist()
                     ig_kwargs["original_token_ids"] = orig_ids
+                    turn_ends = ig_module._find_turn_boundaries_by_tokens(
+                        orig_ids, self.tokenizer
+                    )
+                    ig_boundary_positions[global_idx] = [
+                        int(turn_ends[turn_index])
+                        for turn_index, value in enumerate(ig_reward)
+                        if value is not None and turn_index < len(turn_ends)
+                    ]
 
                     token_scores = ig_module.compute_score(
                         inputs["responses"][idx],
@@ -281,6 +290,11 @@ class NaiveBatchRewardManager:
                     f"(this message will not repeat)",
                     flush=True)
                 self._phase2_skip_logged = True
+
+        if info_gain_rewards is not None:
+            # Keep boundary identity independent from reward magnitude: a true
+            # zero information-gain visit is still a turn boundary.
+            reward_extra_info["ig_boundary_positions"] = ig_boundary_positions
 
         if not self.deepthink_disabled:
             reward_dict = {}

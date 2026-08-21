@@ -12,6 +12,12 @@ from typing import List, Union
 import requests
 from qwen_agent.tools.base import BaseTool, register_tool
 from tool_server.tool_prompt import EXTRACTOR_PROMPT 
+from tool_server.deadline import (
+    ToolDeadline,
+    ToolTimeoutError,
+    is_timeout_error,
+    positive_timeout,
+)
 from openai import OpenAI
 
 from urllib.parse import urlparse, unquote
@@ -21,7 +27,13 @@ import tiktoken
 
 load_dotenv()
 
-VISIT_SERVER_TIMEOUT = int(os.getenv("VISIT_SERVER_TIMEOUT", 200))
+VISIT_SERVER_TIMEOUT = positive_timeout(
+    os.getenv(
+        "VISIT_SERVER_TIMEOUT",
+        os.getenv("TOOL_TIMEOUT_SECONDS", os.getenv("TOOL_TIMEOUT", 200)),
+    ),
+    name="VISIT_SERVER_TIMEOUT",
+)
 WEBCONTENT_MAXLENGTH = int(os.getenv("WEBCONTENT_MAXLENGTH", 150000))
 
 JINA_API_KEYS = os.getenv("JINA_API_KEYS", "")
@@ -70,6 +82,10 @@ class Visit(BaseTool):
     }
     # The `call` method is the main function of the tool.
     def call(self, params: Union[str, dict], **kwargs) -> str:
+        timeout = positive_timeout(
+            kwargs.get("timeout", VISIT_SERVER_TIMEOUT), name="visit timeout"
+        )
+        deadline = ToolDeadline.start(timeout)
         try:
             url = params["url"]
             goal = params["goal"]
@@ -77,43 +93,50 @@ class Visit(BaseTool):
         except:
             return "[Visit] Invalid request format: Input must be a JSON object containing 'url' and 'goal' fields"
 
-        start_time = time.time()
-        
         # Create log folder if it doesn't exist
         log_folder = "log"
         os.makedirs(log_folder, exist_ok=True)
 
         if isinstance(url, str):
-            response = self.readpage_jina(url, goal)
+            response = self.readpage_jina(url, goal, deadline=deadline)
         else:
             response = []
-            assert isinstance(url, List)
-            start_time = time.time()
+            if not isinstance(url, list):
+                return "[Visit] Invalid request format: 'url' must be a string or array"
             for u in url: 
-                if time.time() - start_time > 900:
-                    cur_response = "The useful information in {url} for user goal {goal} as follows: \n\n".format(url=url, goal=goal)
-                    cur_response += "Evidence in page: \n" + "The provided webpage content could not be accessed. Please check the URL or file format." + "\n\n"
-                    cur_response += "Summary: \n" + "The webpage content could not be processed, and therefore, no information is available." + "\n\n"
-                else:
-                    try:
-                        cur_response = self.readpage_jina(u, goal)
-                    except Exception as e:
-                        cur_response = f"Error fetching {u}: {str(e)}"
+                # A URL batch shares one budget instead of multiplying the
+                # configured timeout by the number of URLs.
+                deadline.remaining()
+                cur_response = self.readpage_jina(u, goal, deadline=deadline)
                 response.append(cur_response)
             response = "\n=======\n".join(response)
-        
+
+        # A late provider response must not be persisted as a cache success.
+        deadline.remaining()
         print(f'Summary Length {len(response)}; Summary Content {response}')
         return response.strip()
         
-    def call_server(self, msgs, max_retries=2):
+    def call_server(
+        self,
+        msgs,
+        max_retries=2,
+        *,
+        deadline: ToolDeadline | None = None,
+    ):
+        deadline = deadline or ToolDeadline.start(VISIT_SERVER_TIMEOUT)
+        max_retries = max(1, int(max_retries))
         api_key = os.environ.get("API_KEY")
         url_llm = os.environ.get("API_BASE")
         model_name = os.environ.get("SUMMARY_MODEL_NAME", "")
-        client = OpenAI(
-            api_key=api_key,
-            base_url=url_llm,
-        )
         for attempt in range(max_retries):
+            client = OpenAI(
+                api_key=api_key,
+                base_url=url_llm,
+                timeout=deadline.remaining(),
+                # Retries are managed here so every attempt consumes the same
+                # monotonic deadline rather than receiving a fresh timeout.
+                max_retries=0,
+            )
             try:
                 chat_response = client.chat.completions.create(
                     model=model_name,
@@ -132,13 +155,22 @@ class Visit(BaseTool):
                             content = content[left:right+1]
                     return content
             except Exception as e:
-                # print(e)
+                if is_timeout_error(e):
+                    raise ToolTimeoutError(
+                        f"visit summarizer timed out after {deadline.timeout_seconds:g} seconds"
+                    ) from e
                 if attempt == (max_retries - 1):
                     return ""
-                continue
+            finally:
+                close = getattr(client, "close", None)
+                if close is not None:
+                    close()
+        return ""
 
 
-    def jina_readpage(self, url: str) -> str:
+    def jina_readpage(
+        self, url: str, *, deadline: ToolDeadline | None = None
+    ) -> str:
         """
         Read webpage content using Jina service.
         
@@ -149,8 +181,8 @@ class Visit(BaseTool):
         Returns:
             str: The webpage content or error message
         """
+        deadline = deadline or ToolDeadline.start(VISIT_SERVER_TIMEOUT)
         max_retries = 3
-        timeout = 1000
         
         for attempt in range(max_retries):
             headers = {
@@ -165,7 +197,7 @@ class Visit(BaseTool):
                     f"https://r.jina.ai/{url}",
                     proxies=proxies,
                     headers=headers,
-                    timeout=timeout
+                    timeout=deadline.remaining(),
                 )
                 #print("response is :",response)
                 if response.status_code == 200:
@@ -175,24 +207,34 @@ class Visit(BaseTool):
                     print("response.text is :",response.text)
                     raise ValueError("jina readpage error")
             except Exception as e:
-                time.sleep(0.5)
+                if is_timeout_error(e):
+                    raise ToolTimeoutError(
+                        f"Jina read timed out after {deadline.timeout_seconds:g} seconds"
+                    ) from e
+                deadline.sleep(0.5)
                 print("[visit] Failed to read page.")
                 if attempt == max_retries - 1:
                     return "[visit] Failed to read page."
                 
         return "[visit] Failed to read page."
 
-    def html_readpage_jina(self, url: str) -> str:
+    def html_readpage_jina(
+        self, url: str, *, deadline: ToolDeadline | None = None
+    ) -> str:
+        deadline = deadline or ToolDeadline.start(VISIT_SERVER_TIMEOUT)
         max_attempts = 8
         for attempt in range(max_attempts):
-            content = self.jina_readpage(url)
+            deadline.remaining()
+            content = self.jina_readpage(url, deadline=deadline)
             service = "jina"     
             print(service)
             if content and not content.startswith("[visit] Failed to read page.") and content != "[visit] Empty content." and not content.startswith("[document_parser]"):
                 return content
         return "[visit] Failed to read page."
 
-    def readpage_jina(self, url: str, goal: str) -> str:
+    def readpage_jina(
+        self, url: str, goal: str, *, deadline: ToolDeadline | None = None
+    ) -> str:
         """
         Read webpage content via the Jina reader service with retry logic.
 
@@ -204,16 +246,19 @@ class Visit(BaseTool):
             str: The webpage content or error message
         """
    
+        deadline = deadline or ToolDeadline.start(VISIT_SERVER_TIMEOUT)
         summary_page_func = self.call_server
-        max_retries = int(os.getenv('VISIT_SERVER_MAX_RETRIES', 1))
+        max_retries = max(1, int(os.getenv('VISIT_SERVER_MAX_RETRIES', 1)))
 
-        content = self.html_readpage_jina(url)
+        content = self.html_readpage_jina(url, deadline=deadline)
 
         if content and not content.startswith("[visit] Failed to read page.") and content != "[visit] Empty content." and not content.startswith("[document_parser]"):
             content = truncate_to_tokens(content, max_tokens=95000)
             messages = [{"role":"user","content": EXTRACTOR_PROMPT.format(webpage_content=content, goal=goal)}]
             parse_retry_times = 0
-            raw = summary_page_func(messages, max_retries=max_retries)
+            raw = summary_page_func(
+                messages, max_retries=max_retries, deadline=deadline
+            )
             summary_retries = 3
             while len(raw) < 10 and summary_retries >= 0:
                 truncate_length = int(0.7 * len(content)) if summary_retries > 0 else 25000
@@ -233,7 +278,9 @@ class Visit(BaseTool):
                     goal=goal
                 )
                 messages = [{"role": "user", "content": extraction_prompt}]
-                raw = summary_page_func(messages, max_retries=max_retries)
+                raw = summary_page_func(
+                    messages, max_retries=max_retries, deadline=deadline
+                )
                 summary_retries -= 1
 
             parse_retry_times = 0
@@ -244,7 +291,9 @@ class Visit(BaseTool):
                     raw = json.loads(raw)
                     break
                 except:
-                    raw = summary_page_func(messages, max_retries=max_retries)
+                    raw = summary_page_func(
+                        messages, max_retries=max_retries, deadline=deadline
+                    )
                     parse_retry_times += 1
             
             if parse_retry_times >= 3:
@@ -269,4 +318,3 @@ class Visit(BaseTool):
             useful_information += "Summary: \n" + "The webpage content could not be processed, and therefore, no information is available." + "\n\n"
             return useful_information
 
-    

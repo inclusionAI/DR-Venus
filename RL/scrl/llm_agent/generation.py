@@ -30,6 +30,7 @@ except ImportError:
 from enum import IntEnum
 from tool_server.execute_tools import custom_call_tool
 from tool_server.tool_prompt import SYSTEM_PROMPT, SUMMARY_PROMPT
+from scrl.llm_agent.turn_budget import resolve_turn_limit, turn_jitter_from_env
 from tensordict import TensorDict
 
 _THINK_RE = re.compile(r'<think>(.*?)</think>', re.DOTALL)
@@ -509,8 +510,10 @@ class LLMGenerationManager:
 
         # Note: messages_list_for_kv is captured after the loop, before deepthink replaces messages_list
 
-        max_turns = self.config.max_turns  # add random jitter around max_turns for generalization
-        max_turns = max(1, int(random.random() * 10 - 5) + max_turns)
+        max_turns = resolve_turn_limit(
+            self.config.max_turns,
+            jitter=turn_jitter_from_env(),
+        )
         _turn_timings = []  # [(step, llm_sec, tool_sec, total_sec), ...]
         _n_seqs_total = len(messages_list)
         _apc_dummy_msg = [{"role": "user", "content": "hi"}]

@@ -1,0 +1,69 @@
+{
+  "cross_source_duplicate_questions": 0,
+  "duplicate_rows_removed": 3,
+  "excluded_train": {
+    "normalized_questions": 96,
+    "path": "experiments/data/rl-train-96.parquet",
+    "sha256": "16191f64330450db46b7c2ef53365587b7d13004e4b9fa132766d7f9432b9a01"
+  },
+  "input": {
+    "num_samples": 80000,
+    "path": "RL/data/train.parquet",
+    "sha256": "8b269ca98a8f2cc7d9be390c9b27b3be76fdebc0d33ee689608bd0a2a3775fb6"
+  },
+  "input_rows": 79904,
+  "num_samples": 32,
+  "output": {
+    "path": "experiments/data/rl-val-32.parquet",
+    "sha256": "3f9200b7e8e6961c2acbc7325826c6ccebf4cd596ec2223a7e0721d17ab61c42"
+  },
+  "question_ids": [
+    "sha256:739d0e65f3eb17f1c4b32d65e82d18a13569ec5f662bafc3fae139aa1586b56e",
+    "sha256:a7a74d475f00725cb998588f876743c1584efd36192733871e37a684c6ebb431",
+    "sha256:c395c9ba6cb7060466abee2e6a840299e166e2b98b80aab42a3ba787531de067",
+    "sha256:fff004c8a8fc7202dc16e20d1cefbdf4025772b692652e695c51c5e1f20b3fd2",
+    "sha256:8fd7016b80997618f442909e19f4bee5baef0e3889ddcd287e982624c3d33b2e",
+    "sha256:5e8d113cde838491bd2d67868bf906261b5b92a610233042e52df2db0fb383de",
+    "sha256:90546409d327bef298959579f422f7dfc9556a34f94f6207453bc536aae335da",
+    "sha256:502ff070ec00f56b62846cd40ecbae76f0b23ce63251aa465cdeb1886d47b187",
+    "sha256:4dc0244910a2d39200b931b98b5842d08026ab40d367d01f4ceb70250d03d3c6",
+    "sha256:f835c1f619dded3e0a852bd2d2db6fb45d51cf84ccf94a3b91189bf86b841370",
+    "sha256:c2bb21d009ef8719a37536a9b9fe1343ffea13a864f400bc877b8ca97e7280a6",
+    "sha256:772b6643380c0324484adec125fa0921d255b54af52505ba01f384aa1a6e65db",
+    "sha256:1c8931961747d9dbf6673e43749fd042005edfc92b0020e7068321b77459bc9b",
+    "sha256:9033949e4440972f3bb78b146fa567f1391929ed2522a34d359d73c67abfd352",
+    "sha256:7142273a923dedbfdef0c7271252994f6e7c9109ba50f5819fbf1cbd7a443ba5",
+    "sha256:dbb5059aee03b47cbc22c014bc35d8927b8885736b35ac21a150685e15fe2f3e",
+    "sha256:966063c3f334476522797d0097097c61919a041cc6398b041434cb3e15b333c0",
+    "sha256:dee2d95504ca9678aabfce29c8944182285408e06aa220b8828df59a3c647988",
+    "sha256:3d09dfee203e16f6a81845bd3cc756e0931a4d909e0427be486b3445b34b221d",
+    "sha256:790ca5c4f71d1045f9e9b6254230ae81da69a3ccca2bda69c29b15d035271080",
+    "sha256:608d91eeb1c426c0afb7beba0f7d4d08a4b9573fe8714e8fea7945928fedbc88",
+    "sha256:ef4a46535f0b8c27a134b3c0cd689f8fe53e002cffbcd0fc88fa889f3f016d85",
+    "sha256:bb785fe22efeec8bb4979afe0a2a487cdf27c6c2d80956165b278f29cac405e3",
+    "sha256:68ed141dfbaeab35b24c21a9948a78cc793293848de39f9662ec53624f517045",
+    "sha256:c858c6059fee460857a8d43ab9c66cb3d14d7b5bbf8193bb3d8a7d7f52969830",
+    "sha256:f68f9d423c6fd90f27e05f0994edbb6ec646390692d8aed10ba474cd9896c57e",
+    "sha256:c77cc19b5f48bac19e822d1036d4e1ebb0d2e5970a34d7aebebc95e20b037e9d",
+    "sha256:dbb645e84b5bcf90a1ae06784629caf1418e1ba4d88cfa0431165c3acdf1ff0c",
+    "sha256:1bf3b8ae5de8f0c0799e63877c11deefcbc7448d71e497b9773d113fff16590c",
+    "sha256:5a45f899639a7c933db2687f34d3424a3b39a479c6cf27f46c1288910102a0a8",
+    "sha256:fbbec7842c773eb2771bc6c52b54986d66a7f6276465822e48ca40d123b7e834",
+    "sha256:af1edf5e007e25beca06b3ba144da86b1baea695e861805b820ea8b0b6efc27c"
+  ],
+  "schema_version": "1.0",
+  "selected_counts": {
+    "2wiki": 10,
+    "nq": 15,
+    "tq": 7
+  },
+  "selection_algorithm": "exclude-train+unique-question+proportional-largest-remainder+sha256(seed,question)-v1",
+  "selection_seed": 43,
+  "suite": "rl-val-32",
+  "unique_questions": 79901,
+  "unique_source_counts": {
+    "2wiki": 24893,
+    "nq": 37898,
+    "tq": 17110
+  }
+}

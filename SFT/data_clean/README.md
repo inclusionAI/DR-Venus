@@ -1,135 +1,152 @@
-# REDSearcher_SFT_10K
+# DR-Venus SFT data governance
 
-One-click cleaning pipeline for REDSearcher-style trajectories.
-
-The repository now exposes a single recommended entrypoint:
+`prepare_trajectories.py` is the recommended entrypoint for turning raw REDSearcher-style trajectories into leakage-free SFT splits.
 
 ```bash
 python prepare_trajectories.py --input <raw_parquet_or_dir> --output-dir <output_dir>
 ```
 
-## What the pipeline does
+The default is fully offline: `--correctness-mode none` never calls a service. Correctness filtering is enabled only when a field, an existing cache, or an explicitly configured judge is selected.
 
-Given raw trajectory data, the pipeline will:
+## Pipeline order
 
-1. Normalize raw trajectories into the target SFT schema.
-2. Standardize `search` and `visit` tool calls.
-3. Parse Google-style `search` tool responses into structured JSON.
-4. Remove duplicate `search` and `visit` tool turns.
-5. Validate the final conversation structure.
-6. Resample long trajectories based on turn count.
+The order is fixed so validation/test examples can never be multiplied into training:
+
+1. Normalize either supported input schema.
+2. Remove disallowed and duplicate tool-call/response pairs.
+3. Validate roles and `<think>`, `<tool_call>`, `<tool_response>`, and `<answer>` tags.
+4. Optionally filter final-answer correctness.
+5. Group by normalized question and deterministically split 90/5/5.
+6. Apply turn-aware 1×/2×/5× resampling to the training split only.
+7. Write logical/file hashes and provenance to `data_manifest.json`.
+
+Question grouping uses `NFKC + whitespace collapse + casefold`. Groups are ordered by a seed-salted SHA-256 digest and allocated with deterministic ratio quotas. With at least three question groups, every non-zero split receives a group; this intentionally favors leakage prevention and usable validation/test data over exact ratios for tiny smoke datasets.
 
 Default resampling policy:
 
-- `turns <= 50`: `1x`
-- `50 < turns <= 100`: `2x`
-- `turns > 100`: `5x`
+- `turns <= 50`: 1×
+- `50 < turns <= 100`: 2×
+- `turns > 100`: 5×
 
-These thresholds and multipliers are configurable from the CLI.
+## Input schemas
 
-## Repository Layout
-
-```text
-REDSearcher_SFT_10K/
-├── prepare_trajectories.py          # Recommended one-click pipeline
-├── data/                            # Raw parquet shards and legacy outputs
-├── data_clean_correct/      # Existing reference subset
-└── README.md
-```
-
-## Input Schemas
-
-The pipeline supports two input layouts.
-
-### Raw input
-
-Expected columns:
+Raw rows contain:
 
 - `meta.question`
 - `meta.answer`
 - `messages`
-- `system_prompt` (optional if you use `--system-prompt-mode row`)
+- `system_prompt` (optional)
 
-### Already-clean input
-
-Expected columns:
+Already-clean rows contain:
 
 - `question`
 - `messages`
 - `gt`
 
-## Quick Start
+## Correctness modes
 
-### 1. Install dependencies
+### Offline field
 
-```bash
-python -m pip install pandas pyarrow numpy json5
-```
-
-### 2. Run on the raw dataset directory
+Values may be booleans, numeric scores, common strings (`correct`, `incorrect`, `pass`, `fail`), or objects containing `correct`, `is_correct`, `score`, `reward`, or `judgement`. Dotted paths are supported.
 
 ```bash
 python prepare_trajectories.py \
-  --input <raw_parquet_or_dir> \
-  --output-dir <output_dir> \
-  --system-prompt-mode template \
-  --current-date 2026-03-01 \
-  --shuffle \
-  --seed 42
+  --input <input> \
+  --output-dir <output> \
+  --correctness-mode field \
+  --correctness-field meta.correctness \
+  --correctness-threshold 0.5
 ```
 
-## Output Artifacts
+Missing and invalid field values are dropped under separate reasons in `stats.json`.
 
-Each run writes:
+### Strictly offline cache
 
-- `cleaned_resampled.parquet`: final cleaned dataset
-- `stats.json`: row counts, drop reasons, duplicate-removal stats, turn buckets, resampling distribution
+Cache keys bind the exact question, reference answer, candidate `<answer>`, and prompt version. A JSONL entry has this form:
 
-Optional outputs:
+```json
+{"cache_key":"<sha256>","correct":true,"score":1.0,"prompt_version":"dr-venus-correctness-v1"}
+```
 
-- `stage1_normalized.parquet`: output after raw normalization
-- `stage2_deduped.parquet`: output after duplicate tool-call removal
-- `cleaned_resampled.jsonl`: JSONL export of the final dataset
-
-These optional files are enabled with:
+JSON arrays and JSON objects keyed by `cache_key` are also accepted. Cache misses and malformed decisions are dropped, never sent over the network.
+Entries without an explicit key may instead provide `question`, `gt` (or `reference`), and `candidate` (or `prediction`); the loader derives the same versioned key. Judge-mode write-through records retain these three inputs plus the model and short reason so decisions can be manually calibrated later.
+Use a separate cache when intentionally changing judge model or prompt policy. The manifest inventories the model/prompt provenance of cache records actually used in the run.
 
 ```bash
---keep-intermediate
---write-jsonl
+python prepare_trajectories.py \
+  --input <input> \
+  --output-dir <output> \
+  --correctness-mode cache \
+  --judge-cache <decisions.jsonl>
 ```
 
-## Useful CLI Options
+### Explicit OpenAI-compatible judge
+
+Only `judge` mode permits HTTP(S). It reads the cache first and writes new decisions through to it. Literal secrets are not accepted as CLI options; the key is read from the named environment variable and is never written to logs or manifests.
 
 ```bash
-python prepare_trajectories.py --help
+export OPENAI_API_KEY='<secret>'
+python prepare_trajectories.py \
+  --input <input> \
+  --output-dir <output> \
+  --correctness-mode judge \
+  --judge-cache <decisions.jsonl> \
+  --judge-base-url https://provider.example/v1 \
+  --judge-model <model> \
+  --judge-retries 2
 ```
 
-Most useful flags:
+The judge must return JSON containing a recognized correctness value, preferably `{"correct": true|false, "reason": "..."}`. Exhausted network or parser retries fail the run instead of silently labeling a trajectory incorrect.
 
-- `--input`: raw parquet file or directory
-- `--output-dir`: destination directory
-- `--file-pattern`: glob used when input is a directory, default `train-*.parquet`
-- `--system-prompt-mode`: `template` or `row`
-- `--current-date`: append a deterministic date to the bundled system prompt
-- `--short-max-turns`: default `50`
-- `--medium-max-turns`: default `100`
-- `--short-multiplier`: default `1`
-- `--medium-multiplier`: default `2`
-- `--long-multiplier`: default `5`
-- `--shuffle`: shuffle final rows after resampling
-- `--seed`: shuffle seed
-- `--keep-intermediate`: save stage-level parquet outputs
-- `--keep-metadata`: keep debug columns like source row, turns, and sample copy id
-- `--write-jsonl`: also export the final dataset as JSONL
+## Outputs
 
-## Validation Notes
+Every successful run writes:
 
-The pipeline validates that:
+- `train_clean.parquet`: filtered, unresampled training rows; use this to construct controlled SFT arms.
+- `train_resampled.parquet`: only the training split after 1×/2×/5× expansion.
+- `validation.parquet`: unresampled validation rows.
+- `test.parquet`: unresampled held-out rows.
+- `cleaned_resampled.parquet`: compatibility alias containing the same logical rows as `train_resampled.parquet`.
+- `stats.json`: drop reasons, tool/dedup counts, split counts, and resampling statistics.
+- `data_manifest.json`: source hashes/counts, split seed/algorithm, judge/prompt provenance, output file hashes, and logical dataset hashes.
 
-- conversations start with a `system` message
-- roles alternate correctly after the system turn
-- non-initial user turns contain `<tool_response>...</tool_response>`
-- intermediate assistant turns contain `<think>` and `<tool_call>`
-- final assistant turns contain `<think>` and `<answer>`
+`--write-jsonl` adds matching JSONL artifacts. `--keep-intermediate` writes normalization and post-filter stage parquet files. `--keep-metadata` retains source row, turn count, correctness provenance, and resample copy columns; default training outputs remain `question/messages/gt` only.
 
-Rows that fail validation are dropped and recorded in `stats.json`.
+Use explicit, separate paths when training:
+
+```bash
+TRAIN_FILES=<output>/train_resampled.parquet
+VAL_FILES=<output>/validation.parquet
+```
+
+Do not point validation at `cleaned_resampled.parquet` or the training file.
+
+## Token-budget-matched S0/S1 arms
+
+`build_sft_arms.py` builds the planned uniform S0 and turn-weighted S1 datasets from `train_clean.parquet`:
+
+```bash
+python build_sft_arms.py \
+  --input <output>/train_clean.parquet \
+  --data-manifest <output>/data_manifest.json \
+  --output-dir <arms_output> \
+  --assistant-token-budget 20000000 \
+  --seed 42 \
+  --tokenizer Qwen/Qwen3-4B-Thinking-2507 \
+  --max-length 32768 --truncation right \
+  --train-batch-size 8
+```
+
+Outputs are `s0_uniform.parquet`, `s1_turn_weighted.parquet`, and `sft_arms_manifest.json`. Both arms draw complete trajectories with replacement toward the same assistant-token target. With a tokenizer, counts mirror the training `MultiTurnSFTDataset` loss masks and its 32K right truncation: generation-prompt tokens are excluded while retained assistant suffix and template-terminator tokens are included. Sampling proceeds in complete global train batches (default 8), so the trainer's `drop_last=True` consumes every selected row. The builder jointly searches alternative final batches and fails unless the two realized supervised-token totals differ by at most 0.1% of the target. Target, realized/effective totals, between-arm gap/tolerance, overshoot, selection hashes, source exposure counts, tokenizer, max length, truncation, and seed are recorded.
+
+Without `--tokenizer`, the builder uses a deterministic approximation intended only for tests and cheap pilots. Formal experiment manifests should use the exact training tokenizer.
+
+## Tests
+
+From the repository root:
+
+```bash
+python -m unittest tests.test_data_pipeline -v
+```
+
+Coverage includes both input schemas, illegal/duplicate tool pair removal, role/tag validation, more than 25 correctness encodings, field/cache decisions, judge parsing and retries with a fake transport, deterministic question isolation, train-only resampling, manifest hashes, and injected token counting for S0/S1 construction. Tests do not access the network.

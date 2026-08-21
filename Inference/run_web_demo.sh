@@ -1,6 +1,9 @@
 #!/bin/bash
 # DR-Venus Web Demo Startup Script
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN=${PYTHON_BIN:-python3}
+
 # 默认参数
 PORT=7860
 SHARE=false
@@ -90,7 +93,7 @@ fi
 echo "[3/3] Starting DR-Venus Web Demo..."
 
 
-nohup python web_demo.py --port $PORT > /tmp/web_demo.log 2>&1 &
+nohup "$PYTHON_BIN" "$SCRIPT_DIR/web_demo.py" --port "$PORT" > /tmp/web_demo.log 2>&1 &
 WEB_PID=$!
 echo "  Web Demo started with PID: $WEB_PID"
 

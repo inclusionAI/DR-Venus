@@ -1,0 +1,60 @@
+{
+  "num_samples": 20,
+  "output": {
+    "path": "evaluation/data/pass4-20.parquet",
+    "sha256": "c4fceeae246427cb16b2cfecd40086d1e5e0214be10ee2aff987773c800a2de5"
+  },
+  "parent": {
+    "cohort_path": "evaluation/data/eval-core-100.parquet",
+    "cohort_sha256": "b7d6f405d104110a3c56dcaab6acf68b95631a53a0e0f98666dee11fef70b155",
+    "manifest_path": "evaluation/data/eval-core-100.parquet.manifest.json",
+    "manifest_sha256": "c75d1fa2f0b52582c21e8ae9027275bb599bdf97816819201b80f3983bc7d5df",
+    "num_samples": 100,
+    "suite": "eval-core-100"
+  },
+  "purpose": "fixed subset for four generations per question; not an overall-score cohort",
+  "sample_ids": [
+    "2wiki_ba9891a6092911ebbdaeac1f6bf848b6",
+    "2wiki_07fce4900bde11eba7f7acde48001122",
+    "2wiki_88f0fcd2085011ebbd57ac1f6bf848b6",
+    "2wiki_550733dc089911ebbd77ac1f6bf848b6",
+    "Bamboogle_101",
+    "hotpotqa_5a8327fd5542990548d0b1a3",
+    "hotpotqa_5ade5e335542992fa25da766",
+    "hotpotqa_5adc51375542996e68525300",
+    "musique_3hop1__28404_160713_77246",
+    "musique_2hop__71900_712629",
+    "musique_2hop__68590_27628",
+    "nq_-7803526844187302009",
+    "nq_5315333565609466244",
+    "nq_-5695135371583196053",
+    "popqa_5453492",
+    "popqa_4783797",
+    "popqa_1722072",
+    "tq_sfq_4011",
+    "tq_qf_1443",
+    "tq_qb_6762"
+  ],
+  "schema_version": "1.0",
+  "selected_counts": {
+    "2wiki": 4,
+    "Bamboogle": 1,
+    "hotpotqa": 3,
+    "musique": 3,
+    "nq": 3,
+    "popqa": 3,
+    "tq": 3
+  },
+  "selection_algorithm": "stratified-largest-remainder+sha256(pass4-v1,seed,sample-id)-v1",
+  "selection_seed": 42,
+  "source_counts": {
+    "2wiki": 16,
+    "Bamboogle": 4,
+    "hotpotqa": 16,
+    "musique": 16,
+    "nq": 16,
+    "popqa": 16,
+    "tq": 16
+  },
+  "suite": "pass4-20"
+}

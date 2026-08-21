@@ -1,0 +1,1 @@
+{"ability":"search & question answering","data_source":"nq","extra_info":{"eval_sample_id":"nq_example_1","index":"nq_example_1","split":"dev"},"prompt":[{"content":"What is the capital of France?","role":"user"}],"reward_model":{"ground_truth":"Paris","style":"unknown"}}

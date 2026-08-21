@@ -1,0 +1,41 @@
+# Local editors and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets: commit only the corresponding .env.example files
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Virtual environments and local dependencies
+.venv/
+venv/
+env/
+
+# Models, checkpoints, rollouts, caches, and experiment outputs
+outputs/
+output/
+eval_log/
+checkpoints/
+rollout_traces/
+tool_cache*.jsonl
+*.safetensors
+*.ckpt
+wandb/
+runs/
+
+# Generated evaluation and data artifacts
+artifacts/
+reports/generated/

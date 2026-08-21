@@ -85,6 +85,7 @@ openai-harmony==0.0.8
 outlines_core==0.2.11
 packaging==26.0
 pandas==3.0.0
+pyarrow==16.1.0
 partial-json-parser==0.2.1.1.post7
 pillow==12.2.0
 prometheus-fastapi-instrumentator==7.1.0

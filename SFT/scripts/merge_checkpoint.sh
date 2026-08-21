@@ -9,12 +9,12 @@ Usage:
 Examples:
   bash scripts/merge_checkpoint.sh \
     --backend fsdp \
-    --local-dir /path/to/checkpoints/global_step_100/actor \
+    --local-dir /path/to/checkpoints/global_step_100 \
     --target-dir /path/to/merged_model
 
   bash scripts/merge_checkpoint.sh \
     --backend megatron \
-    --local-dir /path/to/checkpoints/global_step_100/actor \
+    --local-dir /path/to/checkpoints/global_step_100 \
     --target-dir /path/to/merged_model \
     --tie-word-embedding
 EOF

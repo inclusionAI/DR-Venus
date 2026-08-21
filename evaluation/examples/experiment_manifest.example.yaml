@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "predictions": "evaluation/examples/predictions.example.jsonl"
+  },
+  "checkpoint": "Qwen/DR-Venus-4B-SFT",
+  "config": {
+    "temperature": 0.7
+  },
+  "created_at": "2026-08-14T10:00:00+08:00",
+  "environment": {
+    "platform": "linux-x86_64",
+    "python": "3.11.9"
+  },
+  "evaluation_dataset": {
+    "name": "eval-core-1-example",
+    "num_samples": 1,
+    "path": "eval-core-1-example.jsonl",
+    "sha256": "136d1c6625635353880bd752af7b617e83e3fdd099dbcc99cc8200d1797e42d3"
+  },
+  "experiment_id": "example-sft-seed42",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_type": "A100-80G"
+  },
+  "limits": {
+    "context_length": 32768,
+    "max_turns": 12
+  },
+  "model": "DR-Venus-4B-SFT-example",
+  "protocol": {
+    "label": "budget-matched-non-official",
+    "official_comparable": false
+  },
+  "schema_version": "1.0",
+  "seeds": [
+    42
+  ],
+  "upstream_commit": "0000000000000000000000000000000000000000",
+  "usage": {
+    "api_cost_cny": 0.01,
+    "gpu_hours": 0.001
+  }
+}

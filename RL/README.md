@@ -231,14 +231,18 @@ data.val_files=data/test.parquet
    export OUTPUT=/path/to/training/output
    ```
 
-2. Launch:
+2. Inspect the default dry run:
 
    ```bash
    bash train_igpo.sh
    ```
 
    The script auto-loads `.env`, then hands off to
-   `python3 -m verl.trainer.main_ppo` with Hydra-style overrides.
+   `python3 -m verl.trainer.main_ppo` with Hydra-style overrides. It does not
+   train unless `DRY_RUN=false CONFIRM_SPEND=YES` is explicit. Formal R0/R1/R2
+   work should use `experiments/rl/run_short_ablation.sh`, which also validates
+   the budget, local checkpoint hash, fixed cohorts, runtime lock, and per-run
+   evidence manifest.
 
 3. Key knobs (edit near the top of `train_igpo.sh`):
 

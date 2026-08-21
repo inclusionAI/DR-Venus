@@ -131,7 +131,11 @@ By default the wrapper expands to:
 
 ### 3. Dry run
 
-Use `DRY_RUN=True` to print the final `torchrun` command without launching training.
+`DRY_RUN=True` is the default and prints the final `torchrun` command without
+launching training. A live low-level run requires both `DRY_RUN=False` and
+`CONFIRM_SPEND=YES`; formal S0/S1 work should use
+`experiments/sft/run_sft_ablation.sh` for data/checkpoint/budget validation and
+per-arm manifests.
 
 ```bash
 export MODEL_PATH=<MODEL_PATH_OR_HF_ID>
@@ -199,7 +203,7 @@ Typical contents:
 ```bash
 bash scripts/merge_checkpoint.sh \
   --backend fsdp \
-  --local-dir <CKPT_DIR>/global_step_<STEP>/actor \
+  --local-dir <CKPT_DIR>/global_step_<STEP> \
   --target-dir <MERGED_MODEL_DIR>
 ```
 
@@ -208,7 +212,7 @@ bash scripts/merge_checkpoint.sh \
 ```bash
 bash scripts/merge_checkpoint.sh \
   --backend megatron \
-  --local-dir <CKPT_DIR>/global_step_<STEP>/actor \
+  --local-dir <CKPT_DIR>/global_step_<STEP> \
   --target-dir <MERGED_MODEL_DIR> \
   --tie-word-embedding
 ```
@@ -218,9 +222,29 @@ Python entrypoint is also available:
 ```bash
 python scripts/model_merger.py merge \
   --backend fsdp \
-  --local_dir <CKPT_DIR>/global_step_<STEP>/actor \
+  --local_dir <CKPT_DIR>/global_step_<STEP> \
   --target_dir <MERGED_MODEL_DIR>
 ```
+
+LoRA runs persist the exact PEFT configuration as
+`global_step_<STEP>/lora_adapter_config.json`; the merger restores it when it
+writes `lora_adapter/adapter_config.json`. Adapter weights do not encode
+`lora_alpha`, dropout, or the complete target-module policy, so merging a
+historical LoRA checkpoint without this provenance fails closed. If you have a
+verified original PEFT config, provide it explicitly:
+
+```bash
+bash scripts/merge_checkpoint.sh \
+  --backend fsdp \
+  --local-dir <LEGACY_CKPT_DIR>/global_step_<STEP> \
+  --target-dir <MERGED_MODEL_DIR> \
+  --lora-config <VERIFIED_ADAPTER_CONFIG_JSON>
+```
+
+For deliberate corrections to persisted provenance, the merger also accepts
+`--lora-rank`, `--lora-alpha`, `--lora-dropout`,
+`--lora-target-modules`, and `--lora-bias`. These overrides are recorded only
+in the merged adapter config; keep the command in the experiment manifest.
 
 ## Notes
 

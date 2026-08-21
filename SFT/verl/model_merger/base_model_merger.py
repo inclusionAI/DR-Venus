@@ -15,6 +15,7 @@
 import argparse
 import os
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -29,6 +30,8 @@ from transformers import (
 )
 
 from verl.utils import hf_processor, hf_tokenizer
+
+from .lora_provenance import load_lora_provenance, validate_rank_matches_weights, write_adapter_config
 
 
 def parse_args():
@@ -57,6 +60,24 @@ def parse_args():
         help="Whether to use CPU initialization for the model. This is useful for large models that cannot "
         "fit into GPU memory during initialization.",
     )
+    base_op_parser.add_argument(
+        "--lora-config",
+        default=None,
+        help=(
+            "Complete verified PEFT adapter_config.json for a historical LoRA checkpoint. "
+            "New checkpoints load lora_adapter_config.json automatically."
+        ),
+    )
+    base_op_parser.add_argument("--lora-rank", type=int, default=None, help="Explicit rank override.")
+    base_op_parser.add_argument("--lora-alpha", type=float, default=None, help="Explicit alpha override.")
+    base_op_parser.add_argument("--lora-dropout", type=float, default=None, help="Explicit dropout override.")
+    base_op_parser.add_argument(
+        "--lora-target-modules",
+        nargs="+",
+        default=None,
+        help="Explicit target_modules override (space- or comma-separated).",
+    )
+    base_op_parser.add_argument("--lora-bias", default=None, help="Explicit PEFT bias override.")
 
     merge_parser = subparsers.add_parser("merge", parents=[base_op_parser], help="Merge model checkpoints and save.")
     merge_parser.add_argument(
@@ -100,6 +121,8 @@ class ModelMergerConfig:
         hf_model_config_path (Optional[str]): Path to HuggingFace model configuration files. Defaults to None.
         hf_upload (bool): Whether to upload to HuggingFace (computed automatically). Not for initialization.
         use_cpu_initialization (bool): Whether to use CPU initialization for large models. Defaults to False.
+        lora_config_path (Optional[str]): Verified config for a historical LoRA checkpoint.
+        lora_overrides (dict): Explicit field overrides applied to checkpoint provenance.
     """
 
     operation: str  # 'merge' or 'test'
@@ -115,6 +138,8 @@ class ModelMergerConfig:
     hf_model_config_path: Optional[str] = None
     hf_upload: bool = field(init=False)
     use_cpu_initialization: bool = False
+    lora_config_path: Optional[str] = None
+    lora_overrides: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.hf_upload = self.operation == "merge" and bool(self.hf_upload_path)
@@ -125,6 +150,12 @@ class ModelMergerConfig:
 
 
 def generate_config_from_args(args: argparse.Namespace) -> ModelMergerConfig:
+    target_modules = getattr(args, "lora_target_modules", None)
+    if target_modules:
+        target_modules = [part for value in target_modules for part in value.split(",") if part]
+        if target_modules == ["all-linear"]:
+            target_modules = "all-linear"
+
     common_config_args = {
         "operation": args.operation,
         "backend": args.backend,
@@ -134,6 +165,14 @@ def generate_config_from_args(args: argparse.Namespace) -> ModelMergerConfig:
         "local_dir": args.local_dir,
         "hf_model_config_path": os.path.join(args.local_dir, "huggingface"),
         "use_cpu_initialization": args.use_cpu_initialization,
+        "lora_config_path": getattr(args, "lora_config", None),
+        "lora_overrides": {
+            "r": getattr(args, "lora_rank", None),
+            "lora_alpha": getattr(args, "lora_alpha", None),
+            "lora_dropout": getattr(args, "lora_dropout", None),
+            "target_modules": target_modules,
+            "bias": getattr(args, "lora_bias", None),
+        },
     }
 
     if args.operation == "merge":
@@ -247,36 +286,23 @@ class BaseModelMerger(ABC):
         if len(lora_params_names) == 0:
             return None
 
-        import json
-        from typing import OrderedDict
-
-        import peft
         from safetensors.torch import save_file
 
-        lora_params = OrderedDict()
-        target_modules = set()
-        lora_key = None
+        peft_config = load_lora_provenance(
+            self.config.local_dir,
+            explicit_config_path=self.config.lora_config_path,
+            overrides=self.config.lora_overrides,
+        )
+        validate_rank_matches_weights(peft_config, state_dict)
 
+        lora_params = OrderedDict()
         for name in lora_params_names:
             lora_key = name.replace(".default.weight", ".weight")
-            target_modules.add(lora_key.split(".")[-3])
             lora_params[lora_key] = state_dict.pop(name)
-
-        lora_rank = min(lora_params[lora_key].shape[0], lora_params[lora_key].shape[1])
-        peft_dict = {
-            "r": lora_rank,
-            "lora_alpha": 0,  # lora_alpha is not set. An error should be raised to inform the user to set it manually.
-            "target_modules": list(target_modules),
-        }
-        peft_config = peft.LoraConfig(**peft_dict).to_dict()
-        peft_config["task_type"] = peft_config["task_type"].value if peft_config["task_type"] else None
-        peft_config["peft_type"] = peft_config["peft_type"].value if peft_config["peft_type"] else None
-        peft_config["target_modules"] = list(peft_config["target_modules"])
 
         lora_path = os.path.join(self.config.target_dir, "lora_adapter")
         os.makedirs(lora_path, exist_ok=True)
-        with open(os.path.join(lora_path, "adapter_config.json"), "w", encoding="utf-8") as f:
-            json.dump(peft_config, f, ensure_ascii=False, indent=4)
+        write_adapter_config(lora_path, peft_config)
         save_file(lora_params, os.path.join(lora_path, "adapter_model.safetensors"))
 
         for name in list(state_dict.keys()):

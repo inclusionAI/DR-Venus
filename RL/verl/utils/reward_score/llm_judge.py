@@ -15,11 +15,21 @@
 from __future__ import annotations
 
 import os
-import random
+from pathlib import Path
 import re
 from multiprocessing import Pool
+import sys
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+try:
+    from drvenus_repro.tool_cache import execute_with_tool_cache
+except ModuleNotFoundError as exc:
+    if exc.name not in {"drvenus_repro", "drvenus_repro.tool_cache"}:
+        raise
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from drvenus_repro.tool_cache import execute_with_tool_cache
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +52,7 @@ correct: Answer 'yes' if extracted_final_answer matches the [correct_answer] giv
 
 confidence: The extracted confidence score between 0|%| and 100|%| from [response]. Put 100 if there
 is no confidence score available."""
+JUDGE_PROMPT_VERSION = "browsecomp-correctness-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +97,41 @@ def _get_judge_config():
     key = os.environ.get("JUDGE_API_KEY") or os.environ.get("API_KEY", "")
     model = os.environ.get("JUDGE_MODEL_NAME", "Qwen3-235B-A22B-Instruct-2507")
     enable_thinking = os.environ.get("ENABLE_JUDGE_THINKING", "true").lower() == "true"
-    return base, key, model, enable_thinking
+    seed = int(os.environ.get("JUDGE_SEED", "42"))
+    timeout = float(os.environ.get("JUDGE_TIMEOUT_SECONDS", "300"))
+    provider_id = os.environ.get("JUDGE_PROVIDER_ID", "").strip()
+    return base, key, model, enable_thinking, seed, timeout, provider_id
+
+
+def _endpoint_identity(base: str | None, provider_id: str = "") -> str:
+    """Return a stable, credential-free provider identity for cache keys."""
+
+    if provider_id:
+        return provider_id
+    if not base:
+        raise RuntimeError(
+            "JUDGE_API_BASE/API_BASE or JUDGE_PROVIDER_ID is required even in replay "
+            "mode so Judge cache provenance cannot be mixed across providers"
+        )
+    parts = urlsplit(base.strip())
+    if parts.scheme and parts.hostname:
+        host = parts.hostname.casefold()
+        if parts.port is not None:
+            host += f":{parts.port}"
+        path = parts.path.rstrip("/")
+        if not path.endswith("/chat/completions"):
+            path += "/chat/completions"
+        # Drop userinfo, query, and fragment so credentials can never enter the
+        # evidence cache. Provider deployments that share a URL should set an
+        # explicit opaque JUDGE_PROVIDER_ID.
+        return urlunsplit((parts.scheme.casefold(), host, path, "", ""))
+    return base.rstrip("/") + "/chat/completions"
 
 
 def call_judge_api(prompt: str, api_url: str, model_name: str,
                    api_key: str = "", enable_thinking: bool = True,
-                   temperature: float = 0.1, max_retries: int = 3) -> str:
+                   temperature: float = 0.0, max_retries: int = 3,
+                   seed: int = 42, timeout: float = 300.0) -> str:
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -99,24 +139,27 @@ def call_judge_api(prompt: str, api_url: str, model_name: str,
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
-        "top_p": 0.95,
+        "top_p": 1.0,
         "n": 1,
+        "seed": seed,
     }
     if enable_thinking:
         # Qwen / vLLM extension; vanilla OpenAI silently ignores unknown keys.
         payload["chat_template_kwargs"] = {"enable_thinking": True}
     for attempt in range(max_retries):
         try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=300)
+            response = requests.post(api_url, json=payload, headers=headers, timeout=timeout)
             response.raise_for_status()
             result = response.json()
             content = result["choices"][0]["message"]["content"]
             if content and content.strip():
                 return content.strip()
-        except Exception as e:
+        except Exception as exc:
             if attempt == max_retries - 1:
-                return f"Error: {e}"
-    return "Error: all retries exhausted"
+                raise RuntimeError(
+                    f"judge request failed after {max_retries} attempts: {exc}"
+                ) from exc
+    raise RuntimeError("judge request failed without a response")
 
 
 def parse_judge_result(raw: str) -> bool | None:
@@ -128,20 +171,50 @@ def parse_judge_result(raw: str) -> bool | None:
 
 
 def get_judge_response(prompt: str) -> str:
-    base, api_key, model_name, enable_thinking = _get_judge_config()
-    if not base:
-        raise RuntimeError(
-            "[LLM-Judge] No API base configured. Set JUDGE_API_BASE or API_BASE "
-            "in the project-root .env file. `train_igpo.sh` must source it with "
-            "`set -a; source .env; set +a` BEFORE launching Python.")
-    base = base.rstrip("/")
-    # Append /chat/completions unless user already supplied the full endpoint.
-    if base.endswith("/chat/completions"):
-        api_url = base
-    else:
-        api_url = base + "/chat/completions"
-    return call_judge_api(prompt, api_url, model_name, api_key=api_key,
-                          enable_thinking=enable_thinking)
+    base, api_key, model_name, enable_thinking, seed, timeout, provider_id = _get_judge_config()
+    endpoint_identity = _endpoint_identity(base, provider_id)
+    arguments = {
+        "prompt": prompt,
+        "model": model_name,
+        "prompt_version": JUDGE_PROMPT_VERSION,
+        "provider_protocol": "openai-compatible-chat-completions-v1",
+        "endpoint_identity": endpoint_identity,
+        "enable_thinking": enable_thinking,
+        "seed": seed,
+        "temperature": 0.0,
+    }
+
+    def call_online() -> str:
+        if not base:
+            raise RuntimeError(
+                "[LLM-Judge] No API base configured. Set JUDGE_API_BASE or API_BASE "
+                "before using online/record judge mode."
+            )
+        normalized_base = base.rstrip("/")
+        api_url = (
+            normalized_base
+            if normalized_base.endswith("/chat/completions")
+            else normalized_base + "/chat/completions"
+        )
+        return call_judge_api(
+            prompt,
+            api_url,
+            model_name,
+            api_key=api_key,
+            enable_thinking=enable_thinking,
+            temperature=0.0,
+            seed=seed,
+            timeout=timeout,
+        )
+
+    return execute_with_tool_cache(
+        "outcome_judge",
+        arguments,
+        call_online,
+        provider=f"openai-compatible:{endpoint_identity}:{model_name}",
+        mode_env="JUDGE_CACHE_MODE",
+        path_env="JUDGE_CACHE_PATH",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -179,19 +252,16 @@ def compute_score(prompts_str: str, predict_str: str, ground_truth, data_source:
             response=result_str,
         )
         raw_response = get_judge_response(prompt)
-        if random.random() < 0.005:
-            print('[llm_judge prompt]', prompt)
-            print('[llm_judge response]', raw_response)
-
         judge_result = parse_judge_result(raw_response)
         if judge_result is True:
             result_accuracy = 1.0
         elif judge_result is False:
             result_accuracy = 0.0
         else:
-            print(f"[llm_judge] parse returned None, defaulting to 0.0. "
-                  f"raw_response: {raw_response[:200]}")
-            result_accuracy = 0.0
+            raise RuntimeError(
+                "[llm_judge] response did not contain a parseable `correct: yes|no`; "
+                "refusing to convert infrastructure failure into reward=0"
+            )
 
     total_score = result_accuracy
 

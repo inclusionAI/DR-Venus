@@ -6,12 +6,28 @@ https://github.com/Alibaba-NLP/DeepResearch/blob/main/inference/react_agent.py
 import json
 import json5
 import os
+from pathlib import Path
 import re
+import sys
 from typing import Dict, Iterator, List, Literal, Optional, Tuple, Union
 from datetime import datetime
 
-from tool_server.tool_search import *
-from tool_server.tool_visit import *
+try:
+    from .tool_search import Search
+    from .tool_visit import Visit
+except ImportError:  # Support ``python Inference/run_demo.py``.
+    from tool_server.tool_search import Search
+    from tool_server.tool_visit import Visit
+
+try:
+    from drvenus_repro.tool_cache import execute_with_tool_cache
+except ModuleNotFoundError as exc:
+    if exc.name not in {"drvenus_repro", "drvenus_repro.tool_cache"}:
+        raise
+    # Inference is normally launched after ``cd Inference``; make the shared
+    # repository-level reproducibility package importable in that workflow.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from drvenus_repro.tool_cache import execute_with_tool_cache
 
 
 def parse_search_results(text):
@@ -49,19 +65,18 @@ def parse_search_results(text):
     return json.dumps(all_results, ensure_ascii=False)
 
 def custom_call_tool(tool_call: dict, **kwargs):
-  #要从tool_call dict中提取出tool_name:str  tool_args: dict
+    # 要从 tool_call dict 中提取出 tool_name: str、tool_args: dict。
     tool_name = tool_call["name"]
     tool_args = tool_call["arguments"]
-    tool_args["params"] = tool_args
-    if tool_name == "search":
-        raw_result = Search().call(tool_args, **kwargs)
-        result = parse_search_results(raw_result)
-        return result
-    elif tool_name == "visit":
-        raw_result = Visit().call(tool_args, **kwargs)
-        result = raw_result
-        return result
-    else:
+    if tool_name not in {"search", "visit"}:
         return f"Error: Tool {tool_name} not found"
+
+    def call_online():
+        if tool_name == "search":
+            return parse_search_results(Search().call(tool_args, **kwargs))
+        return Visit().call(tool_args, **kwargs)
+
+    provider = "serper" if tool_name == "search" else "jina+openai-compatible-summary"
+    return execute_with_tool_cache(tool_name, tool_args, call_online, provider=provider)
 
 #print(custom_call_tool({"name":"search","arguments":{"query":['Fire Station 301 DCA ARFF metro station']}}))

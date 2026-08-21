@@ -6,12 +6,13 @@ show_help() {
 Usage:
   bash train_sft.sh [hydra_overrides...]
 
-Required environment variables:
+  Required environment variables:
   MODEL_PATH        Model path or Hugging Face model ID.
   TRAIN_FILES       Training parquet file, directory, or hydra-compatible list.
+  VAL_FILES         Validation parquet file(s). Must be disjoint from TRAIN_FILES.
 
 Optional environment variables:
-  VAL_FILES                 Validation parquet file(s). Defaults to TRAIN_FILES.
+  ALLOW_TRAIN_AS_VAL        Explicit escape hatch for smoke tests only. Default: False
   ENTRYPOINT                Python entrypoint. Default: -m verl.trainer.fsdp_sft_trainer
   NNODES                    Number of nodes. Default: 1
   NODE_RANK                 Node rank. Default: 0
@@ -28,12 +29,14 @@ Optional environment variables:
   LR                        Learning rate. Default: 1e-5
   TOTAL_EPOCHS              Number of epochs. Default: 1
   TOTAL_TRAINING_STEPS      Total training steps. Default: null
+  SEED                      Training and data-loader seed. Default: 42
   SAVE_FREQ                 Checkpoint save frequency. Default: -1
   TEST_FREQ                 Validation frequency. Default: -1
   LOGGER                    Hydra logger list. Default: ['console','tensorboard']
   SP_SIZE                   Ulysses sequence parallel size. Default: 1
   LORA_RANK                 LoRA rank. Default: 0
   LORA_ALPHA                LoRA alpha. Default: 16
+  LORA_DROPOUT              LoRA dropout. Default: 0.0
   TARGET_MODULES            LoRA target modules. Default: all-linear
   LIGER                     Enable liger kernel. Default: False
   MULTITURN                 Enable multi-turn SFT dataset. Default: True
@@ -49,6 +52,8 @@ Optional environment variables:
   RESUME_MODE               auto | disable | resume_path. Default: auto
   RESUME_FROM_PATH          Path used when RESUME_MODE=resume_path
   DRY_RUN                   Print the final torchrun command without executing it.
+                            Default: True (safe; paid execution is opt-in).
+  CONFIRM_SPEND              Must be YES when DRY_RUN=False.
   EXTRA_TRAIN_ARGS          Extra hydra overrides appended verbatim.
 EOF
 }
@@ -67,7 +72,8 @@ MASTER_PORT=${MASTER_PORT:-29500}
 
 MODEL_PATH=${MODEL_PATH:-}
 TRAIN_FILES=${TRAIN_FILES:-}
-VAL_FILES=${VAL_FILES:-${TRAIN_FILES}}
+VAL_FILES=${VAL_FILES:-}
+ALLOW_TRAIN_AS_VAL=${ALLOW_TRAIN_AS_VAL:-False}
 
 PROJECT_NAME=${PROJECT_NAME:-deepresearcher-sft}
 MODEL_NAME_FOR_EXP=$(basename "${MODEL_PATH:-model}")
@@ -82,6 +88,7 @@ DATA_MAX_LENGTH=${DATA_MAX_LENGTH:-32768}
 LR=${LR:-1e-5}
 TOTAL_EPOCHS=${TOTAL_EPOCHS:-1}
 TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-null}
+SEED=${SEED:-42}
 SAVE_FREQ=${SAVE_FREQ:--1}
 TEST_FREQ=${TEST_FREQ:--1}
 LOGGER=${LOGGER:-"['console','tensorboard']"}
@@ -89,6 +96,7 @@ LOGGER=${LOGGER:-"['console','tensorboard']"}
 SP_SIZE=${SP_SIZE:-1}
 LORA_RANK=${LORA_RANK:-0}
 LORA_ALPHA=${LORA_ALPHA:-16}
+LORA_DROPOUT=${LORA_DROPOUT:-0.0}
 TARGET_MODULES=${TARGET_MODULES:-all-linear}
 LIGER=${LIGER:-False}
 MULTITURN=${MULTITURN:-True}
@@ -103,7 +111,8 @@ TRUNCATION=${TRUNCATION:-right}
 RM_PAD=${RM_PAD:-True}
 RESUME_MODE=${RESUME_MODE:-auto}
 RESUME_FROM_PATH=${RESUME_FROM_PATH:-null}
-DRY_RUN=${DRY_RUN:-False}
+DRY_RUN=${DRY_RUN:-True}
+CONFIRM_SPEND=${CONFIRM_SPEND:-NO}
 
 if [[ -z "${MODEL_PATH}" ]]; then
     echo "ERROR: MODEL_PATH must be set." >&2
@@ -113,6 +122,16 @@ fi
 if [[ -z "${TRAIN_FILES}" ]]; then
     echo "ERROR: TRAIN_FILES must be set." >&2
     exit 1
+fi
+
+if [[ -z "${VAL_FILES}" ]]; then
+    if [[ "${ALLOW_TRAIN_AS_VAL}" == "True" ]]; then
+        echo "WARNING: VAL_FILES is unset; using TRAIN_FILES because ALLOW_TRAIN_AS_VAL=True." >&2
+        VAL_FILES=${TRAIN_FILES}
+    else
+        echo "ERROR: VAL_FILES must be set to a held-out dataset. Set ALLOW_TRAIN_AS_VAL=True only for a smoke test." >&2
+        exit 1
+    fi
 fi
 
 read -r -a ENTRYPOINT_ARGS <<< "${ENTRYPOINT}"
@@ -143,6 +162,7 @@ CMD=(
     "model.partial_pretrain=${MODEL_PATH}"
     "model.lora_rank=${LORA_RANK}"
     "model.lora_alpha=${LORA_ALPHA}"
+    "model.lora_dropout=${LORA_DROPOUT}"
     "model.target_modules=${TARGET_MODULES}"
     "model.use_liger=${LIGER}"
     "model.enable_gradient_checkpointing=true"
@@ -153,6 +173,7 @@ CMD=(
     "trainer.experiment_name=${EXP_NAME}"
     "trainer.total_epochs=${TOTAL_EPOCHS}"
     "trainer.total_training_steps=${TOTAL_TRAINING_STEPS}"
+    "trainer.seed=${SEED}"
     "trainer.logger=${LOGGER}"
     "trainer.save_freq=${SAVE_FREQ}"
     "trainer.test_freq=${TEST_FREQ}"
@@ -173,6 +194,11 @@ if [[ "${DRY_RUN}" == "True" ]]; then
     printf '%q ' "${CMD[@]}"
     printf '\n'
     exit 0
+fi
+
+if [[ "${CONFIRM_SPEND}" != "YES" ]]; then
+    echo "ERROR: refusing live SFT. Set CONFIRM_SPEND=YES after reviewing the dry run and pilot budget." >&2
+    exit 3
 fi
 
 mkdir -p "${CKPT_DIR}"

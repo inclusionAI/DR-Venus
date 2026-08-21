@@ -12,6 +12,7 @@ import torch
 
 from verl.trainer.config import AlgoConfig
 from verl.trainer.ppo.core_algos import register_adv_est
+from verl.trainer.ppo.info_gain_boundaries import boundary_rows
 
 
 def _compute_turn_level_advantage(
@@ -118,7 +119,20 @@ def compute_grpo_info_gain_advantage(
 
         position_indices = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1)
         f1_mask = (position_indices == last_valid_pos.unsqueeze(1)) & (response_mask == 1)
-        ig_mask = (response_mask == 1) & (~f1_mask) & (token_level_rewards != 0)
+        explicit_positions = kwargs.get("ig_boundary_positions")
+        if explicit_positions is not None:
+            rows = boundary_rows(
+                explicit_positions,
+                batch_size=bsz,
+                sequence_length=seq_len,
+            )
+            explicit_mask = torch.tensor(rows, device=device, dtype=torch.bool)
+            ig_mask = (response_mask == 1) & (~f1_mask) & explicit_mask
+        else:
+            # Backward-compatible fallback for older reward managers. New
+            # training runs always pass explicit positions so zero-valued IG
+            # and token-level KL terms cannot alter boundary identity.
+            ig_mask = (response_mask == 1) & (~f1_mask) & (token_level_rewards != 0)
 
     unique_indices, inverse_indices = np.unique(index, return_inverse=True)
     group_ids = torch.tensor(inverse_indices, device=device, dtype=torch.long)

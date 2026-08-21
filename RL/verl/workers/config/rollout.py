@@ -103,6 +103,7 @@ class RolloutConfig(BaseConfig):
     top_k: int = -1
     top_p: float = 1.0
     do_sample: bool = True
+    seed: int = 0
     n: int = 1
     repetition_penalty: int = 1
 
