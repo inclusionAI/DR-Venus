@@ -258,7 +258,7 @@ class DRAgentLoop(AgentLoopBase):
         }
         if finished:
             record["finished"] = True
-        with open(trace_path, "w") as f:
+        with open(trace_path, "w", encoding="utf-8") as f:
             json.dump(record, f, ensure_ascii=False, indent=2)
 
     # ── Rollout-time IG helpers ──
