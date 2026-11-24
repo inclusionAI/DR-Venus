@@ -144,7 +144,7 @@ triton==3.6.0
 typer==0.24.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
-urllib3==2.6.3
+urllib3==2.8.0
 uvicorn==0.44.0
 uvloop==0.22.1
 vllm==0.18.0
