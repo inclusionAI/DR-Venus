@@ -36,7 +36,7 @@ fastapi==0.135.3
 fastapi-cli==0.0.24
 fastapi-cloud-cli==0.16.1
 fastar==0.11.0
-filelock==3.28.0
+filelock==4.2.1
 flashinfer-python==0.6.6
 frozenlist==1.8.0
 fsspec==2026.3.0
