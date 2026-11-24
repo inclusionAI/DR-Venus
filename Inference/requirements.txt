@@ -11,7 +11,7 @@ attrs==26.1.0
 blake3==1.0.8
 cachetools==7.0.5
 cbor2==5.9.0
-certifi==2026.2.25
+certifi==2026.10.18
 cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.3.2
