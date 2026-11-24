@@ -86,7 +86,7 @@ outlines_core==0.2.11
 packaging==26.0
 pandas==3.0.0
 partial-json-parser==0.2.1.1.post7
-pillow==12.2.0
+pillow==13.0.0
 prometheus-fastapi-instrumentator==7.1.0
 prometheus_client==0.25.0
 propcache==0.4.1
