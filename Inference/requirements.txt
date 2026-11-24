@@ -39,7 +39,7 @@ fastar==0.11.0
 filelock==3.28.0
 flashinfer-python==0.6.6
 frozenlist==1.8.0
-fsspec==2026.3.0
+fsspec==2026.6.0
 gguf==0.18.0
 gradio==4.44.0
 googleapis-common-protos==1.74.0
