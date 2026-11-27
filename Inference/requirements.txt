@@ -41,7 +41,7 @@ flashinfer-python==0.6.6
 frozenlist==1.8.0
 fsspec==2026.3.0
 gguf==0.18.0
-gradio==4.44.0
+gradio==6.16.0
 googleapis-common-protos==1.74.0
 grpcio==1.80.0
 h11==0.16.0
